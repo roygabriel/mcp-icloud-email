@@ -15,6 +15,9 @@ Built with Go using the official [mcp-go SDK](https://mcp-go.dev) and works on a
 - **List Folders** - Discover all available mailbox folders
 - **Mark Read/Unread** - Change read status of emails
 - **Count Emails** - Count emails matching filters without fetching full content
+- **Draft Email** - Save emails as drafts for later review before sending
+- **Get Attachment** - Download email attachments by filename
+- **Flag Email** - Mark emails for follow-up with customizable flags and colors
 - **Cross-Platform** - Works on Linux, Windows, and macOS
 - **Secure** - Uses app-specific passwords (never your main iCloud password)
 - **Smart Defaults** - Handles large inboxes efficiently with server-side filtering
@@ -450,6 +453,173 @@ This server is optimized for large inboxes with thousands of emails:
 2. Adjust `last_days` or date filters to narrow results if needed
 3. Use `search_emails` with appropriate limits
 4. Use `get_email` to retrieve full content only for specific messages
+
+### 10. draft_email
+
+Save an email as a draft for later review before sending.
+
+**Parameters:**
+- `to` (required) - Recipient email address or array of addresses
+- `subject` (required) - Email subject line
+- `body` (required) - Email body content
+- `cc` (optional) - CC email address or array of addresses
+- `bcc` (optional) - BCC email address or array of addresses
+- `html` (optional) - Whether body is HTML format (default: false)
+- `reply_to_id` (optional) - Original email ID if this is a reply draft
+- `folder` (optional) - Folder containing original email for reply (default: INBOX)
+
+**Example - New Draft:**
+```json
+{
+  "to": "recipient@example.com",
+  "subject": "Project Proposal",
+  "body": "Hi,\n\nI'd like to discuss the new project proposal...",
+  "cc": ["manager@example.com"]
+}
+```
+
+**Example - Reply Draft:**
+```json
+{
+  "to": "sender@example.com",
+  "subject": "Meeting notes",
+  "body": "Thanks for sharing. I've reviewed the notes and have a few questions...",
+  "reply_to_id": "12345",
+  "folder": "INBOX"
+}
+```
+
+**Example Response:**
+```json
+{
+  "success": true,
+  "draft_id": "67890",
+  "message": "Draft saved successfully",
+  "preview": "To: recipient@example.com\nSubject: Project Proposal\nBody: Hi,\n\nI'd like to discuss...",
+  "reply_to": "12345"
+}
+```
+
+**Note:** When `reply_to_id` is provided, the tool fetches the original email and automatically sets proper reply headers (In-Reply-To, References) and builds the reply subject with "Re:" prefix. This allows AI to compose replies for user review before sending.
+
+### 11. get_attachment
+
+Download an email attachment by filename.
+
+**Parameters:**
+- `email_id` (required) - Email ID (UID) containing the attachment
+- `filename` (required) - Name of attachment to download
+- `folder` (optional) - Mailbox folder containing the email (default: INBOX)
+- `save_path` (optional) - Path to save file (returns base64 if omitted)
+
+**Example - Save to File:**
+```json
+{
+  "email_id": "12345",
+  "filename": "report.pdf",
+  "folder": "INBOX",
+  "save_path": "/tmp/report.pdf"
+}
+```
+
+**Example Response - Saved:**
+```json
+{
+  "success": true,
+  "filename": "report.pdf",
+  "size": 52480,
+  "mime_type": "application/pdf",
+  "path": "/tmp/report.pdf",
+  "saved": true
+}
+```
+
+**Example - Return Base64:**
+```json
+{
+  "email_id": "12345",
+  "filename": "document.txt",
+  "folder": "INBOX"
+}
+```
+
+**Example Response - Base64:**
+```json
+{
+  "success": true,
+  "filename": "document.txt",
+  "size": 1024,
+  "mime_type": "text/plain",
+  "data": "VGhpcyBpcyBhIHRlc3QgZG9jdW1lbnQ...",
+  "saved": false
+}
+```
+
+**Note:** If `save_path` is provided, the attachment is saved to disk. Otherwise, the content is returned as base64-encoded data. Base64 encoding increases the size by approximately 33%, so consider using `save_path` for large attachments. Common MIME types include: application/pdf, image/jpeg, image/png, application/zip, text/plain, application/vnd.ms-excel, application/vnd.openxmlformats-officedocument.
+
+### 12. flag_email
+
+Mark emails for follow-up with customizable flags and colors.
+
+**Parameters:**
+- `email_id` (required) - Email ID (UID) to flag
+- `flag` (required) - Flag type: follow-up, important, deadline, none
+- `folder` (optional) - Mailbox folder containing the email (default: INBOX)
+- `color` (optional) - Flag color: red, orange, yellow, green, blue, purple
+
+**Example - Flag for Follow-up:**
+```json
+{
+  "email_id": "12345",
+  "flag": "follow-up",
+  "color": "red"
+}
+```
+
+**Example Response:**
+```json
+{
+  "success": true,
+  "email_id": "12345",
+  "flag": "follow-up",
+  "color": "red",
+  "message": "Email flagged as follow-up (red) successfully"
+}
+```
+
+**Example - Remove Flags:**
+```json
+{
+  "email_id": "12345",
+  "flag": "none"
+}
+```
+
+**Example Response:**
+```json
+{
+  "success": true,
+  "email_id": "12345",
+  "flag": "none",
+  "message": "Email flags removed successfully"
+}
+```
+
+**Valid Flag Types:**
+- `follow-up` - Mark for follow-up action
+- `important` - Mark as important/priority
+- `deadline` - Mark as having a deadline
+- `none` - Remove all flags
+
+**Valid Colors:**
+- `red` - Urgent/high priority
+- `orange` - Moderate priority
+- `yellow` - Low priority or for review
+- `green` - Completed or approved
+- `blue` - Information or reference
+- `purple` - Custom category
+
+**Note:** iCloud Mail supports colored flags, which are implemented using IMAP keywords. If custom keywords are not supported by the server, the standard `\Flagged` flag will still be set. Colors may appear differently across email clients.
 
 ## Development
 
