@@ -1,0 +1,183 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+            output: mcp-icloud-email-linux-amd64
+          - os: linux
+            arch: arm64
+            output: mcp-icloud-email-linux-arm64
+          - os: darwin
+            arch: amd64
+            output: mcp-icloud-email-macos-amd64
+          - os: darwin
+            arch: arm64
+            output: mcp-icloud-email-macos-arm64
+          - os: windows
+            arch: amd64
+            output: mcp-icloud-email-windows-amd64.exe
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Get dependencies
+        run: go mod download
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: 0
+        run: |
+          go build -ldflags="-s -w" -o ${{ matrix.output }} .
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.output }}
+          path: ${{ matrix.output }}
+          retention-days: 1
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./binaries
+
+      - name: Display structure of downloaded files
+        run: ls -R ./binaries
+
+      - name: Create checksums
+        run: |
+          cd binaries
+          for dir in */; do
+            cd "$dir"
+            for file in *; do
+              sha256sum "$file" > "${file}.sha256"
+            done
+            cd ..
+          done
+          cd ..
+
+      - name: Get version
+        id: get_version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.get_version.outputs.version }}
+          name: Release ${{ steps.get_version.outputs.version }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            binaries/**/*
+          body: |
+            ## iCloud Email MCP Server ${{ steps.get_version.outputs.version }}
+            
+            Model Context Protocol server for Apple iCloud Mail integration using IMAP and SMTP.
+            
+            ### Features
+            - ✅ Search and list emails with smart filtering
+            - ✅ Get full email content with attachments
+            - ✅ Send new emails with HTML/plain text support
+            - ✅ Reply to emails (with reply-all support)
+            - ✅ Delete emails (trash or permanent)
+            - ✅ Move emails between folders
+            - ✅ List all mailbox folders
+            - ✅ Mark emails as read/unread
+            - ✅ Count emails matching filters
+            - ✅ Optimized for large inboxes
+            - ✅ Cross-platform support (Linux, macOS, Windows)
+            
+            ### Installation
+            
+            1. Download the binary for your platform below
+            2. Make it executable (Linux/macOS): `chmod +x mcp-icloud-email-*`
+            3. Create a `.env` file with your iCloud credentials
+            4. Run the server or add to Claude Desktop
+            
+            ### Platform Downloads
+            
+            - **Linux (x64)**: `mcp-icloud-email-linux-amd64`
+            - **Linux (ARM64)**: `mcp-icloud-email-linux-arm64`
+            - **macOS (Intel)**: `mcp-icloud-email-macos-amd64`
+            - **macOS (Apple Silicon)**: `mcp-icloud-email-macos-arm64`
+            - **Windows (x64)**: `mcp-icloud-email-windows-amd64.exe`
+            
+            ### Checksums
+            
+            SHA256 checksums are provided for each binary (`.sha256` files).
+            
+            ### Documentation
+            
+            See the [README](https://github.com/rgabriel/mcp-icloud-email/blob/main/README.md) for:
+            - Setup instructions
+            - How to generate app-specific passwords
+            - Claude Desktop configuration
+            - All 9 tools with usage examples
+            - Large inbox handling tips
+            - Troubleshooting guide
+            
+            ### Requirements
+            
+            - iCloud account with 2FA enabled
+            - App-specific password from appleid.apple.com
+            - No additional dependencies (static binary)
+            
+            ### Quick Start
+            
+            ```bash
+            # Linux/macOS
+            chmod +x mcp-icloud-email-*
+            export ICLOUD_EMAIL="your-email@icloud.com"
+            export ICLOUD_PASSWORD="xxxx-xxxx-xxxx-xxxx"
+            ./mcp-icloud-email-*
+            
+            # Windows
+            set ICLOUD_EMAIL=your-email@icloud.com
+            set ICLOUD_PASSWORD=xxxx-xxxx-xxxx-xxxx
+            mcp-icloud-email-windows-amd64.exe
+            ```
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
