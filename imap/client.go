@@ -49,6 +49,23 @@ type Attachment struct {
 	Size     int64  `json:"size"`
 }
 
+// AttachmentData contains full attachment data including content
+type AttachmentData struct {
+	Filename string
+	Content  []byte
+	MIMEType string
+	Size     int64
+}
+
+// DraftOptions contains options for saving drafts
+type DraftOptions struct {
+	CC        []string
+	BCC       []string
+	HTML      bool
+	ReplyToID string
+	Folder    string
+}
+
 // EmailFilters contains filter options for searching emails
 type EmailFilters struct {
 	LastDays   int
@@ -542,4 +559,319 @@ func formatAddress(addr *imap.Address) string {
 // GetUsername returns the authenticated username
 func (c *Client) GetUsername() string {
 	return c.username
+}
+
+// SaveDraft saves an email as a draft in the Drafts folder
+func (c *Client) SaveDraft(ctx context.Context, from string, to []string, subject, body string, opts DraftOptions) (string, error) {
+	// Try common draft folder names
+	draftFolders := []string{"Drafts", "INBOX.Drafts", "[Gmail]/Drafts"}
+	var draftFolder string
+	
+	// Find which draft folder exists
+	folders, err := c.ListFolders(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to list folders: %w", err)
+	}
+	
+	for _, df := range draftFolders {
+		for _, f := range folders {
+			if f == df {
+				draftFolder = df
+				break
+			}
+		}
+		if draftFolder != "" {
+			break
+		}
+	}
+	
+	if draftFolder == "" {
+		draftFolder = "Drafts" // fallback default
+	}
+
+	// Build email message
+	var buf strings.Builder
+	
+	// Headers
+	buf.WriteString(fmt.Sprintf("From: %s\r\n", from))
+	buf.WriteString(fmt.Sprintf("To: %s\r\n", strings.Join(to, ", ")))
+	
+	if len(opts.CC) > 0 {
+		buf.WriteString(fmt.Sprintf("Cc: %s\r\n", strings.Join(opts.CC, ", ")))
+	}
+	
+	if len(opts.BCC) > 0 {
+		buf.WriteString(fmt.Sprintf("Bcc: %s\r\n", strings.Join(opts.BCC, ", ")))
+	}
+	
+	// Handle reply headers if this is a reply draft
+	if opts.ReplyToID != "" {
+		folder := opts.Folder
+		if folder == "" {
+			folder = "INBOX"
+		}
+		
+		originalEmail, err := c.GetEmail(ctx, folder, opts.ReplyToID)
+		if err != nil {
+			return "", fmt.Errorf("failed to get original email for reply: %w", err)
+		}
+		
+		// Build reply subject
+		replySubject := subject
+		if !strings.HasPrefix(strings.ToLower(originalEmail.Subject), "re:") {
+			replySubject = "Re: " + originalEmail.Subject
+		} else {
+			replySubject = originalEmail.Subject
+		}
+		subject = replySubject
+		
+		// Add reply headers
+		if originalEmail.MessageID != "" {
+			buf.WriteString(fmt.Sprintf("In-Reply-To: %s\r\n", originalEmail.MessageID))
+			
+			// Build References
+			refs := originalEmail.References
+			if len(refs) == 0 && originalEmail.MessageID != "" {
+				refs = []string{originalEmail.MessageID}
+			} else if originalEmail.MessageID != "" {
+				refs = append(refs, originalEmail.MessageID)
+			}
+			if len(refs) > 0 {
+				buf.WriteString(fmt.Sprintf("References: %s\r\n", strings.Join(refs, " ")))
+			}
+		}
+	}
+	
+	buf.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
+	buf.WriteString(fmt.Sprintf("Date: %s\r\n", time.Now().Format(time.RFC1123Z)))
+	
+	// Generate Message-ID
+	messageID := fmt.Sprintf("<%d.%s@mcp-icloud-email>", time.Now().UnixNano(), c.username)
+	buf.WriteString(fmt.Sprintf("Message-ID: %s\r\n", messageID))
+	
+	// Content type
+	if opts.HTML {
+		buf.WriteString("Content-Type: text/html; charset=utf-8\r\n")
+	} else {
+		buf.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
+	}
+	
+	buf.WriteString("\r\n")
+	buf.WriteString(body)
+	
+	// Append to Drafts folder with \Draft flag
+	flags := []string{imap.DraftFlag}
+	date := time.Now()
+	
+	if err := c.client.Append(draftFolder, flags, date, strings.NewReader(buf.String())); err != nil {
+		return "", fmt.Errorf("failed to append draft: %w", err)
+	}
+	
+	// Get the UID of the appended message (select folder and get last message)
+	mbox, err := c.client.Select(draftFolder, false)
+	if err != nil {
+		return "", fmt.Errorf("failed to select draft folder: %w", err)
+	}
+	
+	// Return the last UID as the draft ID
+	draftID := fmt.Sprintf("%d", mbox.Messages)
+	
+	return draftID, nil
+}
+
+// GetAttachment downloads a specific attachment from an email
+func (c *Client) GetAttachment(ctx context.Context, folder, emailID, filename string) (*AttachmentData, error) {
+	// Select the mailbox
+	if _, err := c.client.Select(folder, false); err != nil {
+		return nil, fmt.Errorf("failed to select folder %s: %w", folder, err)
+	}
+
+	// Parse UID
+	var uid uint32
+	if _, err := fmt.Sscanf(emailID, "%d", &uid); err != nil {
+		return nil, fmt.Errorf("invalid email ID format: %w", err)
+	}
+
+	// Create sequence set
+	seqSet := new(imap.SeqSet)
+	seqSet.AddNum(uid)
+
+	// First, fetch BODYSTRUCTURE to find the attachment
+	messages := make(chan *imap.Message, 1)
+	done := make(chan error, 1)
+	
+	go func() {
+		done <- c.client.UidFetch(seqSet, []imap.FetchItem{imap.FetchBodyStructure}, messages)
+	}()
+
+	msg := <-messages
+	if msg == nil {
+		<-done
+		return nil, fmt.Errorf("email not found")
+	}
+
+	if err := <-done; err != nil {
+		return nil, fmt.Errorf("failed to fetch email structure: %w", err)
+	}
+
+	// Parse BODYSTRUCTURE to find attachment part
+	// This is a simplified implementation - for production, you'd need more robust parsing
+	// For now, we'll fetch the entire message and parse it
+	
+	// Fetch full message body
+	messages2 := make(chan *imap.Message, 1)
+	done2 := make(chan error, 1)
+	section := &imap.BodySectionName{}
+	
+	go func() {
+		done2 <- c.client.UidFetch(seqSet, []imap.FetchItem{section.FetchItem()}, messages2)
+	}()
+
+	msg2 := <-messages2
+	if msg2 == nil {
+		<-done2
+		return nil, fmt.Errorf("email not found")
+	}
+
+	if err := <-done2; err != nil {
+		return nil, fmt.Errorf("failed to fetch message body: %w", err)
+	}
+
+	// Parse the message
+	var bodyLiteral imap.Literal
+	for _, literal := range msg2.Body {
+		bodyLiteral = literal
+		break
+	}
+
+	if bodyLiteral == nil {
+		return nil, fmt.Errorf("failed to get message body")
+	}
+
+	mailMsg, err := mail.ReadMessage(bodyLiteral)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse email: %w", err)
+	}
+
+	// Parse using go-message
+	mr, err := message.CreateReader(mailMsg.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create message reader: %w", err)
+	}
+
+	// Look for the attachment
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to read message part: %w", err)
+		}
+
+		switch h := part.Header.(type) {
+		case *message.AttachmentHeader:
+			attachFilename, _ := h.Filename()
+			if attachFilename == filename {
+				// Found the attachment
+				content, err := io.ReadAll(part.Body)
+				if err != nil {
+					return nil, fmt.Errorf("failed to read attachment content: %w", err)
+				}
+
+				mimeType, _, _ := h.ContentType()
+				
+				return &AttachmentData{
+					Filename: attachFilename,
+					Content:  content,
+					MIMEType: mimeType,
+					Size:     int64(len(content)),
+				}, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("attachment '%s' not found in email", filename)
+}
+
+// FlagEmail sets or removes flags on an email
+func (c *Client) FlagEmail(ctx context.Context, folder, emailID, flagType, color string) error {
+	// Select the mailbox
+	if _, err := c.client.Select(folder, false); err != nil {
+		return fmt.Errorf("failed to select folder %s: %w", folder, err)
+	}
+
+	// Parse UID
+	var uid uint32
+	if _, err := fmt.Sscanf(emailID, "%d", &uid); err != nil {
+		return fmt.Errorf("invalid email ID format: %w", err)
+	}
+
+	// Create sequence set
+	seqSet := new(imap.SeqSet)
+	seqSet.AddNum(uid)
+
+	if flagType == "none" {
+		// Remove all flags
+		item := imap.FormatFlagsOp(imap.RemoveFlags, true)
+		flags := []interface{}{
+			imap.FlaggedFlag,
+			"$FollowUp",
+			"$Important",
+			"$Deadline",
+			"$FlagRed",
+			"$FlagOrange",
+			"$FlagYellow",
+			"$FlagGreen",
+			"$FlagBlue",
+			"$FlagPurple",
+		}
+		
+		// Try to remove flags (may fail if keywords not supported, which is ok)
+		_ = c.client.UidStore(seqSet, item, flags, nil)
+		return nil
+	}
+
+	// Build flag list
+	flags := []interface{}{imap.FlaggedFlag}
+	
+	// Add flag type keyword
+	switch flagType {
+	case "follow-up":
+		flags = append(flags, "$FollowUp")
+	case "important":
+		flags = append(flags, "$Important")
+	case "deadline":
+		flags = append(flags, "$Deadline")
+	default:
+		return fmt.Errorf("invalid flag type: %s", flagType)
+	}
+
+	// Add color keyword if provided
+	if color != "" {
+		switch color {
+		case "red":
+			flags = append(flags, "$FlagRed")
+		case "orange":
+			flags = append(flags, "$FlagOrange")
+		case "yellow":
+			flags = append(flags, "$FlagYellow")
+		case "green":
+			flags = append(flags, "$FlagGreen")
+		case "blue":
+			flags = append(flags, "$FlagBlue")
+		case "purple":
+			flags = append(flags, "$FlagPurple")
+		default:
+			return fmt.Errorf("invalid color: %s", color)
+		}
+	}
+
+	// Set the flags
+	item := imap.FormatFlagsOp(imap.AddFlags, true)
+	if err := c.client.UidStore(seqSet, item, flags, nil); err != nil {
+		return fmt.Errorf("failed to set flags: %w", err)
+	}
+
+	return nil
 }

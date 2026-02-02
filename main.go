@@ -206,6 +206,79 @@ func main() {
 	)
 	s.AddTool(countEmailsTool, tools.CountEmailsHandler(imapClient))
 
+	// Register draft_email tool
+	draftEmailTool := mcp.NewTool("draft_email",
+		mcp.WithDescription("Save email as draft for later review and sending"),
+		mcp.WithString("to",
+			mcp.Required(),
+			mcp.Description("Recipient email address or array of addresses"),
+		),
+		mcp.WithString("subject",
+			mcp.Required(),
+			mcp.Description("Email subject line"),
+		),
+		mcp.WithString("body",
+			mcp.Required(),
+			mcp.Description("Email body content"),
+		),
+		mcp.WithString("cc",
+			mcp.Description("Optional CC email address or array of addresses"),
+		),
+		mcp.WithString("bcc",
+			mcp.Description("Optional BCC email address or array of addresses"),
+		),
+		mcp.WithBoolean("html",
+			mcp.Description("Whether body is HTML format (default: false)"),
+		),
+		mcp.WithString("reply_to_id",
+			mcp.Description("Original email ID if this is a reply draft"),
+		),
+		mcp.WithString("folder",
+			mcp.Description("Folder containing original email for reply (default: INBOX)"),
+		),
+	)
+	s.AddTool(draftEmailTool, tools.DraftEmailHandler(imapClient, cfg.ICloudEmail))
+
+	// Register get_attachment tool
+	getAttachmentTool := mcp.NewTool("get_attachment",
+		mcp.WithDescription("Download email attachment by filename"),
+		mcp.WithString("email_id",
+			mcp.Required(),
+			mcp.Description("Email ID (UID) containing the attachment"),
+		),
+		mcp.WithString("filename",
+			mcp.Required(),
+			mcp.Description("Name of attachment to download"),
+		),
+		mcp.WithString("folder",
+			mcp.Description("Mailbox folder containing the email (default: INBOX)"),
+		),
+		mcp.WithString("save_path",
+			mcp.Description("Path to save file (returns base64 if omitted)"),
+		),
+	)
+	s.AddTool(getAttachmentTool, tools.GetAttachmentHandler(imapClient))
+
+	// Register flag_email tool
+	flagEmailTool := mcp.NewTool("flag_email",
+		mcp.WithDescription("Flag email for follow-up with optional color"),
+		mcp.WithString("email_id",
+			mcp.Required(),
+			mcp.Description("Email ID (UID) to flag"),
+		),
+		mcp.WithString("flag",
+			mcp.Required(),
+			mcp.Description("Flag type: follow-up, important, deadline, none"),
+		),
+		mcp.WithString("folder",
+			mcp.Description("Mailbox folder containing the email (default: INBOX)"),
+		),
+		mcp.WithString("color",
+			mcp.Description("Flag color: red, orange, yellow, green, blue, purple"),
+		),
+	)
+	s.AddTool(flagEmailTool, tools.FlagEmailHandler(imapClient))
+
 	// Log startup
 	fmt.Fprintf(os.Stderr, "iCloud Email MCP Server v1.0.0 starting...\n")
 	fmt.Fprintf(os.Stderr, "Connected to iCloud as: %s\n", cfg.ICloudEmail)
