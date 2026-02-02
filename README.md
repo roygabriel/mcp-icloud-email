@@ -13,6 +13,8 @@ Built with Go using the official [mcp-go SDK](https://mcp-go.dev) and works on a
 - **Delete Email** - Move emails to trash or permanently delete them
 - **Move Email** - Move emails between mailbox folders
 - **List Folders** - Discover all available mailbox folders
+- **Create Folder** - Create new mailbox folders, including nested folders
+- **Delete Folder** - Delete mailbox folders with safety checks
 - **Mark Read/Unread** - Change read status of emails
 - **Count Emails** - Count emails matching filters without fetching full content
 - **Draft Email** - Save emails as drafts for later review before sending
@@ -620,6 +622,123 @@ Mark emails for follow-up with customizable flags and colors.
 - `purple` - Custom category
 
 **Note:** iCloud Mail supports colored flags, which are implemented using IMAP keywords. If custom keywords are not supported by the server, the standard `\Flagged` flag will still be set. Colors may appear differently across email clients.
+
+### 13. create_folder
+
+Create a new mailbox folder for organizing your emails.
+
+**Parameters:**
+- `name` (required) - Name of the new folder
+- `parent` (optional) - Parent folder path for creating nested folders
+
+**Example - Create Simple Folder:**
+```json
+{
+  "name": "Marketing"
+}
+```
+
+**Example Response:**
+```json
+{
+  "success": true,
+  "folder_name": "Marketing",
+  "path": "Marketing",
+  "message": "Folder 'Marketing' created successfully"
+}
+```
+
+**Example - Create Nested Folder:**
+```json
+{
+  "name": "2024",
+  "parent": "Work/Projects"
+}
+```
+
+**Example Response:**
+```json
+{
+  "success": true,
+  "folder_name": "2024",
+  "path": "Work/Projects/2024",
+  "message": "Folder 'Work/Projects/2024' created successfully"
+}
+```
+
+**Notes:**
+- iCloud Mail uses "/" as the folder hierarchy delimiter
+- Parent folders will be created automatically if they don't exist
+- Folder names cannot contain the "/" character
+- Special system folders (INBOX, Sent, Trash) cannot be created manually
+
+### 14. delete_folder
+
+Delete a mailbox folder permanently.
+
+**Parameters:**
+- `name` (required) - Name of folder to delete
+- `force` (optional) - Delete even if folder contains emails (default: false)
+
+**Example - Delete Empty Folder:**
+```json
+{
+  "name": "OldFolder"
+}
+```
+
+**Example Response (Success):**
+```json
+{
+  "success": true,
+  "folder_name": "OldFolder",
+  "was_empty": true,
+  "message": "Folder 'OldFolder' deleted successfully"
+}
+```
+
+**Example - Attempt to Delete Non-Empty Folder:**
+```json
+{
+  "name": "Archive"
+}
+```
+
+**Example Response (Error - Folder Not Empty):**
+```json
+{
+  "success": false,
+  "folder_name": "Archive",
+  "email_count": 150,
+  "message": "Folder 'Archive' is not empty (contains 150 emails). Use force=true to delete anyway."
+}
+```
+
+**Example - Force Delete Non-Empty Folder:**
+```json
+{
+  "name": "Archive",
+  "force": true
+}
+```
+
+**Example Response (Success with Deletion Count):**
+```json
+{
+  "success": true,
+  "folder_name": "Archive",
+  "was_empty": false,
+  "emails_deleted": 150,
+  "message": "Folder 'Archive' deleted successfully"
+}
+```
+
+**Warning:** 
+- Deleting a folder permanently removes all emails contained within it
+- This operation cannot be undone
+- System folders (INBOX, Sent, Trash) cannot be deleted
+- Use `force=true` carefully to avoid accidental data loss
+- The `force` parameter provides a safety mechanism - folders with emails require explicit confirmation
 
 ## Development
 

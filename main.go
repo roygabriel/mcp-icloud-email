@@ -175,6 +175,32 @@ func main() {
 	)
 	s.AddTool(listFoldersTool, tools.ListFoldersHandler(imapClient))
 
+	// Register create_folder tool
+	createFolderTool := mcp.NewTool("create_folder",
+		mcp.WithDescription("Create a new mailbox folder"),
+		mcp.WithString("name",
+			mcp.Required(),
+			mcp.Description("Name of the new folder"),
+		),
+		mcp.WithString("parent",
+			mcp.Description("Parent folder path for nested folders"),
+		),
+	)
+	s.AddTool(createFolderTool, tools.CreateFolderHandler(imapClient))
+
+	// Register delete_folder tool
+	deleteFolderTool := mcp.NewTool("delete_folder",
+		mcp.WithDescription("Delete a mailbox folder"),
+		mcp.WithString("name",
+			mcp.Required(),
+			mcp.Description("Name of folder to delete"),
+		),
+		mcp.WithBoolean("force",
+			mcp.Description("Delete even if folder contains emails (default: false)"),
+		),
+	)
+	s.AddTool(deleteFolderTool, tools.DeleteFolderHandler(imapClient))
+
 	// Register mark_read tool
 	markReadTool := mcp.NewTool("mark_read",
 		mcp.WithDescription("Mark an email as read or unread"),
