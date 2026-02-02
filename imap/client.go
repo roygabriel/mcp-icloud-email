@@ -875,3 +875,44 @@ func (c *Client) FlagEmail(ctx context.Context, folder, emailID, flagType, color
 
 	return nil
 }
+
+// CreateFolder creates a new mailbox folder
+func (c *Client) CreateFolder(ctx context.Context, name, parent string) error {
+	// Construct full folder path
+	folderPath := name
+	if parent != "" {
+		folderPath = parent + "/" + name
+	}
+
+	// Create the folder
+	if err := c.client.Create(folderPath); err != nil {
+		return fmt.Errorf("failed to create folder %s: %w", folderPath, err)
+	}
+
+	return nil
+}
+
+// DeleteFolder deletes a mailbox folder
+func (c *Client) DeleteFolder(ctx context.Context, name string, force bool) (wasEmpty bool, emailCount int, err error) {
+	// Check if folder exists and count emails
+	count, countErr := c.CountEmails(ctx, name, EmailFilters{})
+	if countErr != nil {
+		// If we can't select the folder, it might not exist
+		err = fmt.Errorf("failed to access folder %s: %w", name, countErr)
+		return false, 0, err
+	}
+
+	// If folder is not empty and force is false, return error
+	if count > 0 && !force {
+		return false, count, fmt.Errorf("folder %s is not empty (contains %d emails)", name, count)
+	}
+
+	// Delete the folder
+	if deleteErr := c.client.Delete(name); deleteErr != nil {
+		err = fmt.Errorf("failed to delete folder %s: %w", name, deleteErr)
+		return false, count, err
+	}
+
+	wasEmpty = (count == 0)
+	return wasEmpty, count, nil
+}
