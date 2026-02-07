@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -74,12 +75,13 @@ func main() {
 	// Create SMTP client
 	smtpClient := smtp.NewClient(cfg.ICloudEmail, cfg.ICloudPassword)
 
-	// Create MCP server
+	// Create MCP server with timeout middleware
 	s := server.NewMCPServer(
 		"iCloud Email Server",
-		"1.0.0",
+		version,
 		server.WithToolCapabilities(false),
 		server.WithRecovery(),
+		server.WithToolHandlerMiddleware(timeoutMiddleware(60*time.Second)),
 	)
 
 	// Register search_emails tool
@@ -357,4 +359,15 @@ func main() {
 	}
 
 	slog.Info("server stopped")
+}
+
+// timeoutMiddleware wraps each tool handler with a context deadline.
+func timeoutMiddleware(timeout time.Duration) server.ToolHandlerMiddleware {
+	return func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
+		return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			ctx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			return next(ctx, req)
+		}
+	}
 }

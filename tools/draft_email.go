@@ -20,10 +20,16 @@ func DraftEmailHandler(imapClient EmailWriter, fromEmail string) func(context.Co
 		if !ok || subject == "" {
 			return mcp.NewToolResultError("subject is required"), nil
 		}
+		if err := validateSubjectSize(subject); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		body, ok := args["body"].(string)
 		if !ok || body == "" {
 			return mcp.NewToolResultError("body is required"), nil
+		}
+		if err := validateBodySize(body); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		// Parse and validate To addresses
