@@ -11,7 +11,7 @@ import (
 )
 
 // SearchEmailsHandler creates a handler for searching emails
-func SearchEmailsHandler(client *imap.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func SearchEmailsHandler(client EmailReader) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 
@@ -43,6 +43,11 @@ func SearchEmailsHandler(client *imap.Client) func(context.Context, mcp.CallTool
 			}
 		}
 
+		// Parse offset
+		if offset, ok := args["offset"].(float64); ok && offset > 0 {
+			filters.Offset = int(offset)
+		}
+
 		// Parse unread_only
 		if unreadOnly, ok := args["unread_only"].(bool); ok {
 			filters.UnreadOnly = unreadOnly
@@ -68,7 +73,7 @@ func SearchEmailsHandler(client *imap.Client) func(context.Context, mcp.CallTool
 		}
 
 		// Search emails
-		emails, err := client.SearchEmails(ctx, folder, query, filters)
+		emails, total, err := client.SearchEmails(ctx, folder, query, filters)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to search emails: %v", err)), nil
 		}
@@ -76,6 +81,7 @@ func SearchEmailsHandler(client *imap.Client) func(context.Context, mcp.CallTool
 		// Format response
 		response := map[string]interface{}{
 			"count":  len(emails),
+			"total":  total,
 			"emails": emails,
 			"folder": folder,
 		}

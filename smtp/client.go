@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/emersion/go-message/mail"
+	"github.com/google/uuid"
 	"github.com/rgabriel/mcp-icloud-email/imap"
 )
 
@@ -72,7 +73,7 @@ func (c *Client) SendEmail(ctx context.Context, from string, to []string, subjec
 	h.SetSubject(subject)
 
 	// Generate Message-ID
-	messageID := fmt.Sprintf("<%d.%s@%s>", time.Now().UnixNano(), c.username, smtpServer)
+	messageID := fmt.Sprintf("<%s.%s@%s>", uuid.New().String(), c.username, smtpServer)
 	h.Set("Message-ID", messageID)
 
 	// Set custom headers
@@ -97,31 +98,31 @@ func (c *Client) SendEmail(ctx context.Context, from string, to []string, subjec
 		textHeader.SetContentType("text/plain", map[string]string{"charset": "utf-8"})
 		textPart, err := mw.CreateSingleInline(textHeader)
 		if err != nil {
-			mw.Close()
+			_ = mw.Close()
 			return fmt.Errorf("failed to create text part: %w", err)
 		}
 		plainBody := stripHTML(body)
 		if _, err := textPart.Write([]byte(plainBody)); err != nil {
-			mw.Close()
+			_ = mw.Close()
 			return fmt.Errorf("failed to write text part: %w", err)
 		}
-		textPart.Close()
+		_ = textPart.Close()
 
 		// HTML part
 		var htmlHeader mail.InlineHeader
 		htmlHeader.SetContentType("text/html", map[string]string{"charset": "utf-8"})
 		htmlPart, err := mw.CreateSingleInline(htmlHeader)
 		if err != nil {
-			mw.Close()
+			_ = mw.Close()
 			return fmt.Errorf("failed to create HTML part: %w", err)
 		}
 		if _, err := htmlPart.Write([]byte(body)); err != nil {
-			mw.Close()
+			_ = mw.Close()
 			return fmt.Errorf("failed to write HTML part: %w", err)
 		}
-		htmlPart.Close()
+		_ = htmlPart.Close()
 
-		mw.Close()
+		_ = mw.Close()
 	} else {
 		// Plain text only
 		h.SetContentType("text/plain", map[string]string{"charset": "utf-8"})
@@ -135,15 +136,15 @@ func (c *Client) SendEmail(ctx context.Context, from string, to []string, subjec
 		textHeader.SetContentType("text/plain", map[string]string{"charset": "utf-8"})
 		textPart, err := mw.CreateSingleInline(textHeader)
 		if err != nil {
-			mw.Close()
+			_ = mw.Close()
 			return fmt.Errorf("failed to create text part: %w", err)
 		}
 		if _, err := textPart.Write([]byte(body)); err != nil {
-			mw.Close()
+			_ = mw.Close()
 			return fmt.Errorf("failed to write body: %w", err)
 		}
-		textPart.Close()
-		mw.Close()
+		_ = textPart.Close()
+		_ = mw.Close()
 	}
 
 	// Build recipient list (To + CC + BCC)

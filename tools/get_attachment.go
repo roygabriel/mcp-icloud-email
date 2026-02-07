@@ -9,11 +9,10 @@ import (
 	"path/filepath"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/rgabriel/mcp-icloud-email/imap"
 )
 
 // GetAttachmentHandler creates a handler for downloading email attachments
-func GetAttachmentHandler(imapClient *imap.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func GetAttachmentHandler(imapClient EmailReader) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 
@@ -22,11 +21,17 @@ func GetAttachmentHandler(imapClient *imap.Client) func(context.Context, mcp.Cal
 		if !ok || emailID == "" {
 			return mcp.NewToolResultError("email_id is required"), nil
 		}
+		if err := validateEmailID(emailID); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		// Get required filename
 		filename, ok := args["filename"].(string)
 		if !ok || filename == "" {
 			return mcp.NewToolResultError("filename is required"), nil
+		}
+		if err := validateFilename(filename); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		// Get folder (default to INBOX)
@@ -35,8 +40,11 @@ func GetAttachmentHandler(imapClient *imap.Client) func(context.Context, mcp.Cal
 			folder = "INBOX"
 		}
 
-		// Get optional save_path
+		// Get optional save_path and validate against path traversal
 		savePath, _ := args["save_path"].(string)
+		if err := validateSavePath(savePath); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		// Get attachment from IMAP
 		attachment, err := imapClient.GetAttachment(ctx, folder, emailID, filename)
@@ -60,7 +68,7 @@ func GetAttachmentHandler(imapClient *imap.Client) func(context.Context, mcp.Cal
 			}
 
 			// Write file
-			if err := os.WriteFile(savePath, attachment.Content, 0644); err != nil {
+			if err := os.WriteFile(savePath, attachment.Content, 0600); err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("failed to save attachment: %v", err)), nil
 			}
 
