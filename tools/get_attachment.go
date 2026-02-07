@@ -68,7 +68,7 @@ func GetAttachmentHandler(imapClient EmailReader) func(context.Context, mcp.Call
 			}
 
 			// Write file
-			if err := os.WriteFile(savePath, attachment.Content, 0644); err != nil {
+			if err := os.WriteFile(savePath, attachment.Content, 0600); err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("failed to save attachment: %v", err)), nil
 			}
 

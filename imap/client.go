@@ -91,13 +91,13 @@ func NewClient(email, password string) (*Client, error) {
 
 	// Login
 	if err := c.Login(email, password); err != nil {
-		c.Logout()
+		_ = c.Logout()
 		return nil, fmt.Errorf("failed to login: %w", err)
 	}
 
 	// Test connection by selecting INBOX
 	if _, err := c.Select("INBOX", false); err != nil {
-		c.Logout()
+		_ = c.Logout()
 		return nil, fmt.Errorf("failed to select INBOX: %w", err)
 	}
 
@@ -672,7 +672,7 @@ func (c *Client) SaveDraft(ctx context.Context, from string, to []string, subjec
 		}
 		
 		// Build reply subject
-		replySubject := subject
+		var replySubject string
 		if !strings.HasPrefix(strings.ToLower(originalEmail.Subject), "re:") {
 			replySubject = "Re: " + originalEmail.Subject
 		} else {
@@ -827,8 +827,7 @@ func (c *Client) GetAttachment(ctx context.Context, folder, emailID, filename st
 			return nil, fmt.Errorf("failed to read message part: %w", err)
 		}
 
-		switch h := part.Header.(type) {
-		case *message.AttachmentHeader:
+		if h, ok := part.Header.(*message.AttachmentHeader); ok {
 			attachFilename, _ := h.Filename()
 			if attachFilename == filename {
 				// Found the attachment
