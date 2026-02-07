@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/emersion/go-message/mail"
+	"github.com/google/uuid"
 	"github.com/rgabriel/mcp-icloud-email/imap"
 )
 
@@ -72,7 +73,7 @@ func (c *Client) SendEmail(ctx context.Context, from string, to []string, subjec
 	h.SetSubject(subject)
 
 	// Generate Message-ID
-	messageID := fmt.Sprintf("<%d.%s@%s>", time.Now().UnixNano(), c.username, smtpServer)
+	messageID := fmt.Sprintf("<%s.%s@%s>", uuid.New().String(), c.username, smtpServer)
 	h.Set("Message-ID", messageID)
 
 	// Set custom headers
