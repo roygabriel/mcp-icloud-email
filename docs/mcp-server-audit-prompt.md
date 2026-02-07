@@ -52,7 +52,8 @@ Investigate these first — they cause data corruption or crashes in production.
 - **No validation**: Config values (URLs, ports, durations, counts) are read from env vars but never validated. Add a `Validate()` method checking ranges, formats, and required fields.
 - **Secrets in env vars**: Support `file://` prefix for sensitive values so Docker/K8s secrets can be mounted as files instead of passed as environment variables.
 - **Missing defaults**: Every optional config field should have a sensible default. Document defaults in the config struct or help text.
-- **go.mod version vs CI mismatch**: Check that CI uses `go-version-file: 'go.mod'` instead of a hardcoded Go version that may drift.
+- **Go version pinning in CI**: Do NOT use `go-version-file: 'go.mod'` in `actions/setup-go` — it can fail to resolve newer Go versions correctly (e.g., `setup-go` may not find a recently released patch version). Instead, pin the exact version with `go-version: 'X.Y.Z'` and update it in lockstep with `go.mod`. Pin the same version in your Dockerfile (`golang:X.Y.Z-alpine`), CI workflows, and `go.mod`.
+- **Go stdlib vulnerabilities**: Run `govulncheck ./...` regularly. Most findings will be in the Go standard library itself (crypto/tls, crypto/x509, net/textproto, encoding/asn1, etc.). The fix is bumping the Go version in `go.mod`, CI, and Dockerfile — not changing application code. Check the highest `Fixed in` version across all vulnerabilities and upgrade to at least that patch release.
 
 ## 8. Observability (P1)
 
@@ -71,7 +72,8 @@ Investigate these first — they cause data corruption or crashes in production.
 ## 10. Build & CI (P2)
 
 - **No Makefile**: Add targets for `build`, `test`, `lint`, `clean`, `docker`, `run`. Inject version via `-ldflags "-X main.version=$(VERSION)"` using `git describe`.
-- **No linting**: Add `.golangci.yml` enabling at minimum: errcheck, govet, staticcheck, gosec, unused, ineffassign. Run in CI.
+- **No linting**: Add `.golangci.yml` enabling at minimum: errcheck, govet, staticcheck, gosec, unused, ineffassign. Run in CI with `golangci/golangci-lint-action`.
+- **golangci-lint version vs Go version**: golangci-lint can only lint code targeting a Go version less than or equal to the Go version it was built with. If you target Go 1.25+, you need golangci-lint v2 (v2.4.0+), which requires `golangci-lint-action@v7` or `@v8`. The v1 line (`golangci-lint-action@v6`) ships golangci-lint v1.x built with Go 1.24 and will fail with `the Go language version used to build golangci-lint is lower than the targeted Go version`. When upgrading to golangci-lint v2, you must also migrate `.golangci.yml` to v2 format: add `version: "2"` at the top, move `linters-settings` to `linters.settings`, move `issues.exclude-rules` to `linters.exclusions.rules`, and remove `gosimple` (merged into `staticcheck`). Run `golangci-lint migrate` to automate this.
 - **No vulnerability scanning**: Add `govulncheck ./...` to CI. Add Dependabot or Renovate for dependency updates.
 - **No container image**: Add a multi-stage Dockerfile (builder + distroless/static runtime). Run as non-root. Image should be < 20MB.
 
