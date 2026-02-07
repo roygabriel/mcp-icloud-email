@@ -1,6 +1,6 @@
 module github.com/rgabriel/mcp-icloud-email
 
-go 1.25.1
+go 1.25.7
 
 require (
 	github.com/emersion/go-imap v1.2.1
