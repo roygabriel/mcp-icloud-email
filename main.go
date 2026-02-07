@@ -52,7 +52,14 @@ func main() {
 		slog.Error("failed to create IMAP client", "error", err)
 		os.Exit(1)
 	}
-	defer imapClient.Close()
+	// Test IMAP connection by listing folders
+	_, err = imapClient.ListFolders(context.Background())
+	if err != nil {
+		_ = imapClient.Close()
+		slog.Error("failed to connect to iCloud IMAP (check credentials)", "error", err)
+		os.Exit(1)
+	}
+	defer func() { _ = imapClient.Close() }()
 
 	// Set up signal handling for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -65,13 +72,6 @@ func main() {
 		slog.Info("received signal, shutting down", "signal", sig)
 		cancel()
 	}()
-
-	// Test IMAP connection by listing folders
-	_, err = imapClient.ListFolders(ctx)
-	if err != nil {
-		slog.Error("failed to connect to iCloud IMAP (check credentials)", "error", err)
-		os.Exit(1)
-	}
 
 	// Create SMTP client
 	smtpClient := smtp.NewClient(cfg.ICloudEmail, cfg.ICloudPassword)
@@ -449,7 +449,7 @@ func main() {
 	stdioServer := server.NewStdioServer(s)
 	if err := stdioServer.Listen(ctx, os.Stdin, os.Stdout); err != nil {
 		slog.Error("server error", "error", err)
-		os.Exit(1)
+		return
 	}
 
 	slog.Info("server stopped")
@@ -480,11 +480,12 @@ func loggingMiddleware() server.ToolHandlerMiddleware {
 			result, err := next(ctx, req)
 			duration := time.Since(start)
 
-			if err != nil {
+			switch {
+			case err != nil:
 				logger.Error("tool call failed", "duration_ms", duration.Milliseconds(), "error", err)
-			} else if result != nil && result.IsError {
+			case result != nil && result.IsError:
 				logger.Warn("tool call returned error", "duration_ms", duration.Milliseconds())
-			} else {
+			default:
 				logger.Info("tool call completed", "duration_ms", duration.Milliseconds())
 			}
 
