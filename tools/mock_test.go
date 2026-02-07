@@ -56,16 +56,16 @@ func (m *MockEmailService) ListFolders(ctx context.Context) ([]string, error) {
 	return m.Folders, nil
 }
 
-func (m *MockEmailService) SearchEmails(ctx context.Context, folder, query string, filters imap.EmailFilters) ([]imap.Email, error) {
+func (m *MockEmailService) SearchEmails(ctx context.Context, folder, query string, filters imap.EmailFilters) ([]imap.Email, int, error) {
 	m.LastMethod = "SearchEmails"
 	m.LastFolder = folder
 	m.LastQuery = query
 	m.LastFilters = filters
 	m.CallCount++
 	if m.Err != nil {
-		return nil, m.Err
+		return nil, 0, m.Err
 	}
-	return m.Emails, nil
+	return m.Emails, len(m.Emails), nil
 }
 
 func (m *MockEmailService) GetEmail(ctx context.Context, folder, emailID string) (*imap.Email, error) {
