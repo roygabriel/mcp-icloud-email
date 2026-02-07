@@ -1,140 +1,171 @@
 # iCloud Email MCP Server
 
-A Model Context Protocol (MCP) server that connects to Apple iCloud Mail using IMAP and SMTP protocols. This server enables AI assistants like Claude to interact with your iCloud email - search emails, read messages, send emails, reply to messages, and manage your mailbox.
+A [Model Context Protocol](https://modelcontextprotocol.io) server that gives AI assistants full access to Apple iCloud Mail through IMAP and SMTP. Search, read, send, reply, organize, and manage your iCloud mailbox -- all from Claude or any MCP-compatible client.
 
-Built with Go using the official [mcp-go SDK](https://mcp-go.dev) and works on all operating systems (Linux, Windows, macOS).
+Built with Go and the [mcp-go SDK](https://mcp-go.dev). Ships as a single static binary for Linux, macOS, and Windows.
+
+---
+
+## Table of Contents
+
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Usage with Claude Desktop](#usage-with-claude-desktop)
+- [Available Tools](#available-tools)
+- [Working with Large Inboxes](#working-with-large-inboxes)
+- [Development](#development)
+- [Architecture](#architecture)
+- [Security](#security)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
 
 ## Features
 
-- **Search Emails** - Search and list emails with filters for date range, unread status, and text queries
-- **Get Email** - Retrieve full email content including body, headers, and attachments list
-- **Send Email** - Compose and send new emails with CC, BCC, and HTML support
-- **Reply to Email** - Reply to existing emails with reply-all support
-- **Delete Email** - Move emails to trash or permanently delete them
-- **Move Email** - Move emails between mailbox folders
-- **List Folders** - Discover all available mailbox folders
-- **Create Folder** - Create new mailbox folders, including nested folders
-- **Delete Folder** - Delete mailbox folders with safety checks
-- **Mark Read/Unread** - Change read status of emails
-- **Count Emails** - Count emails matching filters without fetching full content
-- **Draft Email** - Save emails as drafts for later review before sending
-- **Get Attachment** - Download email attachments by filename
-- **Flag Email** - Mark emails for follow-up with customizable flags and colors
-- **Cross-Platform** - Works on Linux, Windows, and macOS
-- **Secure** - Uses app-specific passwords (never your main iCloud password)
-- **Smart Defaults** - Handles large inboxes efficiently with server-side filtering
+**Email Operations**
+- Search and list emails with filters for date range, read status, and text queries
+- Retrieve full email content including body, headers, and attachment metadata
+- Send new emails with CC, BCC, and HTML support
+- Reply to emails with reply-all support
+- Save drafts for review before sending
+- Download attachments by filename (to disk or as base64)
+
+**Mailbox Management**
+- List, create, and delete mailbox folders (including nested folders)
+- Move emails between folders
+- Mark emails as read or unread
+- Flag emails for follow-up with customizable colors
+- Delete emails (move to trash or permanent)
+- Count emails matching filters without fetching content
+
+**Operational**
+- Thread-safe IMAP access with mutex protection
+- Structured JSON logging with UUID request correlation
+- 60-second timeout middleware on every tool call
+- Input validation: path traversal prevention, size limits, folder/ID sanitization
+- MCP tool annotations (read-only, destructive, idempotent) for client-side safety
+- CI pipeline with tests, linting, and vulnerability scanning
+
+---
+
+## Quick Start
+
+```bash
+# Install
+go install github.com/rgabriel/mcp-icloud-email@latest
+
+# Set credentials (app-specific password, not your main iCloud password)
+export ICLOUD_EMAIL="you@icloud.com"
+export ICLOUD_PASSWORD="xxxx-xxxx-xxxx-xxxx"
+
+# Run
+mcp-icloud-email
+```
+
+Or download a prebuilt binary from the [Releases](https://github.com/rgabriel/mcp-icloud-email/releases) page.
+
+---
 
 ## Prerequisites
 
-- **Go 1.21 or higher** - [Install Go](https://go.dev/doc/install)
-- **iCloud Account** with two-factor authentication (2FA) enabled
-- **App-Specific Password** - Required for IMAP/SMTP access (see setup below)
+- **Go 1.21+** -- [install](https://go.dev/doc/install) (only needed when building from source)
+- **iCloud account** with two-factor authentication enabled
+- **App-specific password** -- required for IMAP/SMTP access
 
-## App-Specific Password Setup
+### Generating an App-Specific Password
 
-iCloud requires an app-specific password for third-party applications to access your email data. Follow these steps:
+1. Go to [appleid.apple.com](https://appleid.apple.com) and sign in
+2. Navigate to **Sign-In and Security** > **App-Specific Passwords**
+3. Click **Generate an app-specific password**
+4. Enter a label (e.g. "MCP Email Server") and click **Create**
+5. Copy the generated password (`xxxx-xxxx-xxxx-xxxx`) and store it securely
 
-1. Go to [Apple ID Account Management](https://appleid.apple.com)
-2. Sign in with your Apple ID
-3. Navigate to **Sign-In and Security** section
-4. Click on **App-Specific Passwords**
-5. Click **Generate an app-specific password**
-6. Enter a label like "MCP Email Server"
-7. Click **Create**
-8. Copy the generated password (format: `xxxx-xxxx-xxxx-xxxx`)
-9. Save this password securely - you won't be able to see it again
-
-**Important Notes:**
+Notes:
 - Your Apple ID must have two-factor authentication enabled
 - You can create up to 25 active app-specific passwords
-- If you change your main Apple ID password, all app-specific passwords are revoked
+- Changing your main Apple ID password revokes all app-specific passwords
 - Never use your main iCloud password for IMAP/SMTP access
+
+---
 
 ## Installation
 
 ### From Source
 
 ```bash
-# Clone the repository
 git clone https://github.com/rgabriel/mcp-icloud-email.git
 cd mcp-icloud-email
-
-# Build the server
-go build -o mcp-icloud-email
-
-# Optional: Install to your PATH
-go install
+make build
 ```
 
-### Using go install
+### Using `go install`
 
 ```bash
 go install github.com/rgabriel/mcp-icloud-email@latest
 ```
 
+### Docker
+
+```bash
+docker build -t mcp-icloud-email .
+
+docker run \
+  -e ICLOUD_EMAIL="you@icloud.com" \
+  -e ICLOUD_PASSWORD="xxxx-xxxx-xxxx-xxxx" \
+  mcp-icloud-email
+```
+
+The Docker image uses a multi-stage build with a [distroless](https://github.com/GoogleContainerTools/distroless) base image and runs as a non-root user.
+
+### Prebuilt Binaries
+
+Download the binary for your platform from the [Releases](https://github.com/rgabriel/mcp-icloud-email/releases) page. Binaries are available for:
+
+| Platform | Architecture | Binary |
+|----------|-------------|--------|
+| Linux | x86_64 | `mcp-icloud-email-linux-amd64` |
+| Linux | ARM64 | `mcp-icloud-email-linux-arm64` |
+| macOS | Intel | `mcp-icloud-email-macos-amd64` |
+| macOS | Apple Silicon | `mcp-icloud-email-macos-arm64` |
+| Windows | x86_64 | `mcp-icloud-email-windows-amd64.exe` |
+
+SHA256 checksums are provided alongside each binary.
+
+---
+
 ## Configuration
 
-Create a `.env` file in the same directory as the server executable (for local testing):
+The server requires two environment variables:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `ICLOUD_EMAIL` | Yes | Your iCloud email address (Apple ID) |
+| `ICLOUD_PASSWORD` | Yes | App-specific password from appleid.apple.com |
+| `LOG_LEVEL` | No | Logging verbosity: `DEBUG`, `INFO` (default), `WARN`, `ERROR` |
+
+You can set these as environment variables or place them in a `.env` file:
 
 ```bash
 cp .env.example .env
+# Edit .env with your credentials
 ```
 
-Edit `.env` and add your credentials:
-
-```bash
-ICLOUD_EMAIL=your-email@icloud.com
-ICLOUD_PASSWORD=xxxx-xxxx-xxxx-xxxx
-```
-
-**Environment Variables:**
-
-- `ICLOUD_EMAIL` (required) - Your iCloud email address (Apple ID)
-- `ICLOUD_PASSWORD` (required) - App-specific password from appleid.apple.com
+---
 
 ## Usage with Claude Desktop
 
-Add this server to your Claude Desktop configuration file:
+Add the server to your Claude Desktop configuration file.
 
-### macOS
+**macOS** -- `~/Library/Application Support/Claude/claude_desktop_config.json`
 
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
+**Linux** -- `~/.config/claude/claude_desktop_config.json`
 
-```json
-{
-  "mcpServers": {
-    "icloud-email": {
-      "command": "/path/to/mcp-icloud-email",
-      "env": {
-        "ICLOUD_EMAIL": "your-email@icloud.com",
-        "ICLOUD_PASSWORD": "xxxx-xxxx-xxxx-xxxx"
-      }
-    }
-  }
-}
-```
-
-### Windows
-
-Edit `%APPDATA%\Claude\claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "icloud-email": {
-      "command": "C:\\path\\to\\mcp-icloud-email.exe",
-      "env": {
-        "ICLOUD_EMAIL": "your-email@icloud.com",
-        "ICLOUD_PASSWORD": "xxxx-xxxx-xxxx-xxxx"
-      }
-    }
-  }
-}
-```
-
-### Linux
-
-Edit `~/.config/claude/claude_desktop_config.json`:
+**Windows** -- `%APPDATA%\Claude\claude_desktop_config.json`
 
 ```json
 {
@@ -142,7 +173,7 @@ Edit `~/.config/claude/claude_desktop_config.json`:
     "icloud-email": {
       "command": "/path/to/mcp-icloud-email",
       "env": {
-        "ICLOUD_EMAIL": "your-email@icloud.com",
+        "ICLOUD_EMAIL": "you@icloud.com",
         "ICLOUD_PASSWORD": "xxxx-xxxx-xxxx-xxxx"
       }
     }
@@ -150,736 +181,325 @@ Edit `~/.config/claude/claude_desktop_config.json`:
 }
 ```
 
-After adding the configuration, restart Claude Desktop.
+Restart Claude Desktop after saving.
+
+---
 
 ## Available Tools
 
-### 1. search_emails
+The server exposes 14 MCP tools. Each tool includes schema constraints and annotations indicating whether it is read-only, destructive, or idempotent.
 
-Search and list emails with optional filters.
+### search_emails
 
-**Parameters:**
-- `query` (optional) - Search term to find in subject/body
-- `folder` (optional) - Mailbox folder to search in (default: INBOX)
-- `last_days` (optional) - Only show emails from last N days (default: 30)
-- `limit` (optional) - Maximum number of emails to return (default: 50, max: 200)
-- `unread_only` (optional) - Only return unread emails (default: false)
-- `since` (optional) - Start date filter in ISO 8601 format
-- `before` (optional) - End date filter in ISO 8601 format
+Search and list emails with optional filters. Returns email headers (not full bodies) for efficiency.
 
-**Example:**
-```json
-{
-  "folder": "INBOX",
-  "last_days": 7,
-  "unread_only": true,
-  "limit": 20
-}
-```
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `query` | string | | Search term for subject/body |
+| `folder` | string | `INBOX` | Mailbox folder to search |
+| `last_days` | integer | `30` | Only show emails from last N days |
+| `limit` | integer | `50` | Max emails to return (max 200) |
+| `offset` | integer | `0` | Skip first N results (for pagination) |
+| `unread_only` | boolean | `false` | Only return unread emails |
+| `since` | string | | Start date (ISO 8601) |
+| `before` | string | | End date (ISO 8601) |
 
-**Example Response:**
-```json
-{
-  "count": 3,
-  "folder": "INBOX",
-  "emails": [
-    {
-      "id": "12345",
-      "from": "John Doe <john@example.com>",
-      "to": ["you@icloud.com"],
-      "subject": "Meeting Tomorrow",
-      "date": "2024-02-01T14:30:00Z",
-      "snippet": "Hi, I wanted to confirm our meeting...",
-      "unread": true,
-      "attachments": []
-    }
-  ]
-}
-```
+Response includes `count` (returned), `total` (matching before offset/limit), and an array of email summaries.
 
-**Note:** The default `last_days` of 30 helps handle large inboxes efficiently by using server-side IMAP filtering.
+### get_email
 
-### 2. get_email
+Retrieve full email content including body text, HTML, headers, and attachment list.
 
-Get full email content including body and attachments.
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `email_id` | string | *(required)* | Email UID |
+| `folder` | string | `INBOX` | Mailbox folder |
 
-**Parameters:**
-- `email_id` (required) - Email ID (UID) to retrieve
-- `folder` (optional) - Mailbox folder containing the email (default: INBOX)
+### send_email
 
-**Example:**
-```json
-{
-  "email_id": "12345",
-  "folder": "INBOX"
-}
-```
+Compose and send a new email.
 
-**Example Response:**
-```json
-{
-  "id": "12345",
-  "from": "John Doe <john@example.com>",
-  "to": ["you@icloud.com"],
-  "cc": [],
-  "subject": "Meeting Tomorrow",
-  "date": "2024-02-01T14:30:00Z",
-  "bodyPlain": "Hi, I wanted to confirm our meeting for tomorrow at 2pm.",
-  "bodyHTML": "<html><body>Hi, I wanted to confirm...</body></html>",
-  "unread": false,
-  "attachments": [
-    {
-      "filename": "agenda.pdf",
-      "size": 52480
-    }
-  ],
-  "messageId": "<abc123@example.com>"
-}
-```
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `to` | string/array | *(required)* | Recipient address(es) |
+| `subject` | string | *(required)* | Subject line |
+| `body` | string | *(required)* | Email body |
+| `cc` | string/array | | CC address(es) |
+| `bcc` | string/array | | BCC address(es) |
+| `html` | boolean | `false` | Whether body is HTML |
 
-### 3. send_email
+### reply_email
 
-Send a new email.
+Reply to an existing email. Automatically sets In-Reply-To and References headers.
 
-**Parameters:**
-- `to` (required) - Recipient email address or array of addresses
-- `subject` (required) - Email subject line
-- `body` (required) - Email body content
-- `cc` (optional) - CC email address or array of addresses
-- `bcc` (optional) - BCC email address or array of addresses
-- `html` (optional) - Whether body is HTML format (default: false)
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `email_id` | string | *(required)* | Email UID to reply to |
+| `body` | string | *(required)* | Reply body |
+| `folder` | string | `INBOX` | Folder containing original email |
+| `reply_all` | boolean | `false` | Reply to all recipients |
+| `html` | boolean | `false` | Whether body is HTML |
 
-**Example:**
-```json
-{
-  "to": "recipient@example.com",
-  "subject": "Project Update",
-  "body": "Here's the latest status on the project...",
-  "cc": ["manager@example.com"],
-  "html": false
-}
-```
+### draft_email
 
-**Example Response:**
-```json
-{
-  "success": true,
-  "message": "Email sent successfully to [recipient@example.com]",
-  "subject": "Project Update"
-}
-```
+Save an email as a draft. Supports reply drafts with automatic header threading.
 
-### 4. reply_email
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `to` | string/array | *(required)* | Recipient address(es) |
+| `subject` | string | *(required)* | Subject line |
+| `body` | string | *(required)* | Email body |
+| `cc` | string/array | | CC address(es) |
+| `bcc` | string/array | | BCC address(es) |
+| `html` | boolean | `false` | Whether body is HTML |
+| `reply_to_id` | string | | Original email ID for reply drafts |
+| `folder` | string | `INBOX` | Folder of original email (for replies) |
 
-Reply to an existing email.
+### delete_email
 
-**Parameters:**
-- `email_id` (required) - Email ID (UID) being replied to
-- `body` (required) - Reply message body
-- `folder` (optional) - Mailbox folder containing the original email (default: INBOX)
-- `reply_all` (optional) - Reply to all recipients (default: false)
-- `html` (optional) - Whether body is HTML format (default: false)
+Delete an email by moving it to trash, or permanently delete it.
 
-**Example:**
-```json
-{
-  "email_id": "12345",
-  "body": "Thanks for the update! I'll be there.",
-  "reply_all": false
-}
-```
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `email_id` | string | *(required)* | Email UID |
+| `folder` | string | `INBOX` | Mailbox folder |
+| `permanent` | boolean | `false` | Permanently delete instead of trashing |
 
-**Example Response:**
-```json
-{
-  "success": true,
-  "message": "Reply sent successfully",
-  "original_subject": "Meeting Tomorrow"
-}
-```
-
-### 5. delete_email
-
-Delete an email (move to trash or permanently delete).
-
-**Parameters:**
-- `email_id` (required) - Email ID (UID) to delete
-- `folder` (optional) - Mailbox folder containing the email (default: INBOX)
-- `permanent` (optional) - Permanently delete instead of moving to trash (default: false)
-
-**Example:**
-```json
-{
-  "email_id": "12345",
-  "folder": "INBOX",
-  "permanent": false
-}
-```
-
-**Example Response:**
-```json
-{
-  "success": true,
-  "email_id": "12345",
-  "message": "Email moved to trash successfully"
-}
-```
-
-### 6. move_email
+### move_email
 
 Move an email from one folder to another.
 
-**Parameters:**
-- `email_id` (required) - Email ID (UID) to move
-- `from_folder` (optional) - Source mailbox folder (default: INBOX)
-- `to_folder` (required) - Destination mailbox folder
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `email_id` | string | *(required)* | Email UID |
+| `from_folder` | string | `INBOX` | Source folder |
+| `to_folder` | string | *(required)* | Destination folder |
 
-**Example:**
-```json
-{
-  "email_id": "12345",
-  "from_folder": "INBOX",
-  "to_folder": "Archive"
-}
-```
+### mark_read
 
-**Example Response:**
-```json
-{
-  "success": true,
-  "email_id": "12345",
-  "from_folder": "INBOX",
-  "to_folder": "Archive",
-  "message": "Email moved from 'INBOX' to 'Archive' successfully"
-}
-```
+Change the read/unread status of an email.
 
-### 7. list_folders
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `email_id` | string | *(required)* | Email UID |
+| `folder` | string | `INBOX` | Mailbox folder |
+| `read` | boolean | `true` | `true` to mark read, `false` for unread |
 
-List all available mailbox folders.
+### flag_email
 
-**Parameters:** None
+Flag an email for follow-up with optional color.
 
-**Example Response:**
-```json
-{
-  "count": 5,
-  "folders": [
-    "INBOX",
-    "Sent Messages",
-    "Drafts",
-    "Deleted Messages",
-    "Archive"
-  ]
-}
-```
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `email_id` | string | *(required)* | Email UID |
+| `flag` | string | *(required)* | `follow-up`, `important`, `deadline`, or `none` |
+| `folder` | string | `INBOX` | Mailbox folder |
+| `color` | string | | `red`, `orange`, `yellow`, `green`, `blue`, `purple` |
 
-### 8. mark_read
+Set `flag` to `none` to remove all flags.
 
-Mark an email as read or unread.
+### count_emails
 
-**Parameters:**
-- `email_id` (required) - Email ID (UID) to mark
-- `folder` (optional) - Mailbox folder containing the email (default: INBOX)
-- `read` (optional) - Mark as read (true) or unread (false) (default: true)
+Count emails matching filters without downloading message content.
 
-**Example:**
-```json
-{
-  "email_id": "12345",
-  "folder": "INBOX",
-  "read": true
-}
-```
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `folder` | string | `INBOX` | Mailbox folder |
+| `last_days` | integer | | Only count from last N days |
+| `unread_only` | boolean | `false` | Only count unread |
 
-**Example Response:**
-```json
-{
-  "success": true,
-  "email_id": "12345",
-  "message": "Email marked as read successfully"
-}
-```
+### list_folders
 
-### 9. count_emails
+List all available mailbox folders. Takes no parameters.
 
-Count emails matching filters without fetching full content.
+### create_folder
 
-**Parameters:**
-- `folder` (optional) - Mailbox folder to count in (default: INBOX)
-- `last_days` (optional) - Only count emails from last N days
-- `unread_only` (optional) - Only count unread emails (default: false)
+Create a new mailbox folder.
 
-**Example:**
-```json
-{
-  "folder": "INBOX",
-  "last_days": 7,
-  "unread_only": true
-}
-```
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | string | *(required)* | Folder name |
+| `parent` | string | | Parent folder for nesting (e.g. `Work/Projects`) |
 
-**Example Response:**
-```json
-{
-  "count": 15,
-  "folder": "INBOX",
-  "last_days": 7,
-  "unread_only": true
-}
-```
+### delete_folder
 
-## Date/Time Format
+Delete a mailbox folder. Non-empty folders require explicit confirmation.
 
-All date/time parameters use **ISO 8601 format** (RFC3339 in Go):
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | string | *(required)* | Folder name |
+| `force` | boolean | `false` | Delete even if folder contains emails |
 
-- Format: `YYYY-MM-DDTHH:MM:SSZ`
-- Examples:
-  - `2024-01-15T14:30:00Z` (UTC)
-  - `2024-01-15T14:30:00-05:00` (with timezone offset)
-  - `2024-01-15T14:30:00+01:00` (with timezone offset)
+System folders (INBOX, Sent, Trash) cannot be deleted.
 
-The server handles timezone conversions automatically.
-
-## Handling Large Inboxes
-
-This server is optimized for large inboxes with thousands of emails:
-
-- **Server-side filtering**: Uses IMAP SEARCH commands to filter on the server before downloading
-- **Default limits**: `search_emails` defaults to last 30 days and max 50 emails per query
-- **Smart fetching**: Only fetches email headers for searches; full body content loaded on demand with `get_email`
-- **Efficient counting**: `count_emails` tool provides quick counts without fetching message content
-
-**Recommended workflow for large inboxes:**
-1. Use `count_emails` first to see how many emails match your criteria
-2. Adjust `last_days` or date filters to narrow results if needed
-3. Use `search_emails` with appropriate limits
-4. Use `get_email` to retrieve full content only for specific messages
-
-### 10. draft_email
-
-Save an email as a draft for later review before sending.
-
-**Parameters:**
-- `to` (required) - Recipient email address or array of addresses
-- `subject` (required) - Email subject line
-- `body` (required) - Email body content
-- `cc` (optional) - CC email address or array of addresses
-- `bcc` (optional) - BCC email address or array of addresses
-- `html` (optional) - Whether body is HTML format (default: false)
-- `reply_to_id` (optional) - Original email ID if this is a reply draft
-- `folder` (optional) - Folder containing original email for reply (default: INBOX)
-
-**Example - New Draft:**
-```json
-{
-  "to": "recipient@example.com",
-  "subject": "Project Proposal",
-  "body": "Hi,\n\nI'd like to discuss the new project proposal...",
-  "cc": ["manager@example.com"]
-}
-```
-
-**Example - Reply Draft:**
-```json
-{
-  "to": "sender@example.com",
-  "subject": "Meeting notes",
-  "body": "Thanks for sharing. I've reviewed the notes and have a few questions...",
-  "reply_to_id": "12345",
-  "folder": "INBOX"
-}
-```
-
-**Example Response:**
-```json
-{
-  "success": true,
-  "draft_id": "67890",
-  "message": "Draft saved successfully",
-  "preview": "To: recipient@example.com\nSubject: Project Proposal\nBody: Hi,\n\nI'd like to discuss...",
-  "reply_to": "12345"
-}
-```
-
-**Note:** When `reply_to_id` is provided, the tool fetches the original email and automatically sets proper reply headers (In-Reply-To, References) and builds the reply subject with "Re:" prefix. This allows AI to compose replies for user review before sending.
-
-### 11. get_attachment
+### get_attachment
 
 Download an email attachment by filename.
 
-**Parameters:**
-- `email_id` (required) - Email ID (UID) containing the attachment
-- `filename` (required) - Name of attachment to download
-- `folder` (optional) - Mailbox folder containing the email (default: INBOX)
-- `save_path` (optional) - Path to save file (returns base64 if omitted)
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `email_id` | string | *(required)* | Email UID |
+| `filename` | string | *(required)* | Attachment filename |
+| `folder` | string | `INBOX` | Mailbox folder |
+| `save_path` | string | | File path to save to (returns base64 if omitted) |
 
-**Example - Save to File:**
-```json
-{
-  "email_id": "12345",
-  "filename": "report.pdf",
-  "folder": "INBOX",
-  "save_path": "/tmp/report.pdf"
-}
-```
+---
 
-**Example Response - Saved:**
-```json
-{
-  "success": true,
-  "filename": "report.pdf",
-  "size": 52480,
-  "mime_type": "application/pdf",
-  "path": "/tmp/report.pdf",
-  "saved": true
-}
-```
+## Working with Large Inboxes
 
-**Example - Return Base64:**
-```json
-{
-  "email_id": "12345",
-  "filename": "document.txt",
-  "folder": "INBOX"
-}
-```
+The server uses server-side IMAP SEARCH commands, so filtering happens on the mail server before any data is downloaded. Default settings are tuned for large mailboxes:
 
-**Example Response - Base64:**
-```json
-{
-  "success": true,
-  "filename": "document.txt",
-  "size": 1024,
-  "mime_type": "text/plain",
-  "data": "VGhpcyBpcyBhIHRlc3QgZG9jdW1lbnQ...",
-  "saved": false
-}
-```
+- `search_emails` defaults to the last 30 days and a limit of 50
+- `count_emails` returns counts without fetching message content
+- `get_email` loads full body content on demand for individual messages
 
-**Note:** If `save_path` is provided, the attachment is saved to disk. Otherwise, the content is returned as base64-encoded data. Base64 encoding increases the size by approximately 33%, so consider using `save_path` for large attachments. Common MIME types include: application/pdf, image/jpeg, image/png, application/zip, text/plain, application/vnd.ms-excel, application/vnd.openxmlformats-officedocument.
+**Recommended workflow:**
 
-### 12. flag_email
+1. Use `count_emails` to check how many emails match your criteria
+2. Adjust `last_days`, `since`/`before`, or `unread_only` to narrow results
+3. Use `search_emails` with `offset` and `limit` for pagination
+4. Use `get_email` only for specific messages you need to read in full
 
-Mark emails for follow-up with customizable flags and colors.
-
-**Parameters:**
-- `email_id` (required) - Email ID (UID) to flag
-- `flag` (required) - Flag type: follow-up, important, deadline, none
-- `folder` (optional) - Mailbox folder containing the email (default: INBOX)
-- `color` (optional) - Flag color: red, orange, yellow, green, blue, purple
-
-**Example - Flag for Follow-up:**
-```json
-{
-  "email_id": "12345",
-  "flag": "follow-up",
-  "color": "red"
-}
-```
-
-**Example Response:**
-```json
-{
-  "success": true,
-  "email_id": "12345",
-  "flag": "follow-up",
-  "color": "red",
-  "message": "Email flagged as follow-up (red) successfully"
-}
-```
-
-**Example - Remove Flags:**
-```json
-{
-  "email_id": "12345",
-  "flag": "none"
-}
-```
-
-**Example Response:**
-```json
-{
-  "success": true,
-  "email_id": "12345",
-  "flag": "none",
-  "message": "Email flags removed successfully"
-}
-```
-
-**Valid Flag Types:**
-- `follow-up` - Mark for follow-up action
-- `important` - Mark as important/priority
-- `deadline` - Mark as having a deadline
-- `none` - Remove all flags
-
-**Valid Colors:**
-- `red` - Urgent/high priority
-- `orange` - Moderate priority
-- `yellow` - Low priority or for review
-- `green` - Completed or approved
-- `blue` - Information or reference
-- `purple` - Custom category
-
-**Note:** iCloud Mail supports colored flags, which are implemented using IMAP keywords. If custom keywords are not supported by the server, the standard `\Flagged` flag will still be set. Colors may appear differently across email clients.
-
-### 13. create_folder
-
-Create a new mailbox folder for organizing your emails.
-
-**Parameters:**
-- `name` (required) - Name of the new folder
-- `parent` (optional) - Parent folder path for creating nested folders
-
-**Example - Create Simple Folder:**
-```json
-{
-  "name": "Marketing"
-}
-```
-
-**Example Response:**
-```json
-{
-  "success": true,
-  "folder_name": "Marketing",
-  "path": "Marketing",
-  "message": "Folder 'Marketing' created successfully"
-}
-```
-
-**Example - Create Nested Folder:**
-```json
-{
-  "name": "2024",
-  "parent": "Work/Projects"
-}
-```
-
-**Example Response:**
-```json
-{
-  "success": true,
-  "folder_name": "2024",
-  "path": "Work/Projects/2024",
-  "message": "Folder 'Work/Projects/2024' created successfully"
-}
-```
-
-**Notes:**
-- iCloud Mail uses "/" as the folder hierarchy delimiter
-- Parent folders will be created automatically if they don't exist
-- Folder names cannot contain the "/" character
-- Special system folders (INBOX, Sent, Trash) cannot be created manually
-
-### 14. delete_folder
-
-Delete a mailbox folder permanently.
-
-**Parameters:**
-- `name` (required) - Name of folder to delete
-- `force` (optional) - Delete even if folder contains emails (default: false)
-
-**Example - Delete Empty Folder:**
-```json
-{
-  "name": "OldFolder"
-}
-```
-
-**Example Response (Success):**
-```json
-{
-  "success": true,
-  "folder_name": "OldFolder",
-  "was_empty": true,
-  "message": "Folder 'OldFolder' deleted successfully"
-}
-```
-
-**Example - Attempt to Delete Non-Empty Folder:**
-```json
-{
-  "name": "Archive"
-}
-```
-
-**Example Response (Error - Folder Not Empty):**
-```json
-{
-  "success": false,
-  "folder_name": "Archive",
-  "email_count": 150,
-  "message": "Folder 'Archive' is not empty (contains 150 emails). Use force=true to delete anyway."
-}
-```
-
-**Example - Force Delete Non-Empty Folder:**
-```json
-{
-  "name": "Archive",
-  "force": true
-}
-```
-
-**Example Response (Success with Deletion Count):**
-```json
-{
-  "success": true,
-  "folder_name": "Archive",
-  "was_empty": false,
-  "emails_deleted": 150,
-  "message": "Folder 'Archive' deleted successfully"
-}
-```
-
-**Warning:** 
-- Deleting a folder permanently removes all emails contained within it
-- This operation cannot be undone
-- System folders (INBOX, Sent, Trash) cannot be deleted
-- Use `force=true` carefully to avoid accidental data loss
-- The `force` parameter provides a safety mechanism - folders with emails require explicit confirmation
+---
 
 ## Development
-
-### Running Locally
-
-```bash
-# Set environment variables
-export ICLOUD_EMAIL="your-email@icloud.com"
-export ICLOUD_PASSWORD="xxxx-xxxx-xxxx-xxxx"
-
-# Run the server
-go run main.go
-```
 
 ### Building
 
 ```bash
-# Build for your current platform
-go build -o mcp-icloud-email
+make build          # Build binary
+make test           # Run tests with race detector
+make lint           # Run golangci-lint
+make vet            # Run go vet
+make vuln           # Run govulncheck
+make all            # vet + lint + test + build
+make docker         # Build Docker image
+make tools          # Install dev tools (golangci-lint, govulncheck)
+```
 
-# Build for specific platforms
-GOOS=linux GOARCH=amd64 go build -o mcp-icloud-email-linux
-GOOS=darwin GOARCH=arm64 go build -o mcp-icloud-email-macos
-GOOS=windows GOARCH=amd64 go build -o mcp-icloud-email-windows.exe
+### Running Locally
+
+```bash
+export ICLOUD_EMAIL="you@icloud.com"
+export ICLOUD_PASSWORD="xxxx-xxxx-xxxx-xxxx"
+make run
+```
+
+### Testing
+
+The project includes 78+ table-driven tests covering all tool handlers, input validation, and error paths. Tests use mock implementations of the `EmailService` and `EmailSender` interfaces -- no live IMAP/SMTP connection required.
+
+```bash
+make test
 ```
 
 ### Testing with MCP Inspector
 
-Use the [MCP Inspector](https://github.com/modelcontextprotocol/inspector) to test the server:
+Use the [MCP Inspector](https://github.com/modelcontextprotocol/inspector) to interactively test the server:
 
 ```bash
 npx @modelcontextprotocol/inspector mcp-icloud-email
 ```
 
+### CI Pipeline
+
+Every push to `main` or `dev` and every pull request runs:
+
+- `go vet` and `go test -race` -- correctness and data race detection
+- `golangci-lint` -- static analysis (errcheck, govet, staticcheck, gosec, gocritic, and more)
+- `govulncheck` -- known vulnerability scanning
+
+Tagged releases (`v*.*.*`) trigger automated cross-platform builds with SHA256 checksums.
+
+---
+
+## Architecture
+
+```
+mcp-icloud-email/
+  main.go              Server setup, tool registration, middleware chain
+  config/config.go     Environment variable loading and validation
+  imap/client.go       IMAP client (imap.mail.me.com:993, TLS)
+  smtp/client.go       SMTP client (smtp.mail.me.com:587, STARTTLS)
+  tools/
+    interfaces.go      EmailReader, EmailWriter, EmailService, EmailSender
+    helpers.go         Address parsing, shared utilities
+    validate.go        Input validation (paths, folders, IDs, sizes)
+    handlers_test.go   78+ table-driven tests with mocks
+    <tool>.go          One file per tool handler (14 files)
+```
+
+**Middleware chain:** Each tool call passes through `logging -> timeout -> handler`. The logging middleware assigns a UUID request ID and records tool name, duration, and outcome. The timeout middleware enforces a 60-second deadline.
+
+**Thread safety:** The IMAP client uses a `sync.Mutex` to serialize access. Internal methods (lowercase) assume the caller holds the lock, preventing deadlocks from nested calls like `DeleteEmail -> moveEmail`.
+
+### Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| [mcp-go](https://github.com/mark3labs/mcp-go) | MCP SDK -- tool registration, stdio transport |
+| [go-imap/v2](https://github.com/emersion/go-imap) | IMAP protocol client |
+| [go-message](https://github.com/emersion/go-message) | MIME parsing and email formatting |
+| [godotenv](https://github.com/joho/godotenv) | `.env` file loading |
+| [uuid](https://github.com/google/uuid) | Message-ID and request ID generation |
+
+---
+
+## Security
+
+- **App-specific passwords only** -- never accepts or stores your main iCloud password
+- **TLS everywhere** -- IMAP on port 993 (implicit TLS), SMTP on port 587 (STARTTLS)
+- **Input validation** -- path traversal prevention, null byte rejection, IMAP wildcard filtering, control character rejection, numeric UID validation
+- **Size limits** -- 10 MB body, 998-character subject (per RFC 2822)
+- **Distroless Docker image** -- minimal attack surface, runs as non-root
+- **No third-party data sharing** -- the server runs locally and communicates only with iCloud servers
+- **Revocable access** -- app-specific passwords can be revoked at any time from appleid.apple.com
+
+Never commit your `.env` file to version control. The `.gitignore` already excludes it.
+
+---
+
 ## Troubleshooting
 
 ### Authentication Failed
 
-**Problem:** "Failed to login" or "Failed to connect to iCloud IMAP"
-
-**Solutions:**
-- Verify you're using an **app-specific password**, not your main iCloud password
-- Check that your Apple ID has two-factor authentication enabled
+- Verify you are using an app-specific password, not your main iCloud password
+- Check that two-factor authentication is enabled on your Apple ID
 - Regenerate a new app-specific password at appleid.apple.com
-- Ensure your email address is correct (it should be your Apple ID)
-- Check your internet connection and firewall settings
+- Confirm your email address matches your Apple ID
 
 ### Folder Not Found
 
-**Problem:** "failed to select folder" error
-
-**Solutions:**
-- Run the `list_folders` tool to see available folder names
-- iCloud uses specific folder names like "Deleted Messages" (not "Trash")
+- Run `list_folders` to see the exact folder names your account has
+- iCloud uses names like "Deleted Messages" rather than "Trash"
 - Folder names are case-sensitive
-- Some folders may have special characters or spaces in their names
 
 ### Invalid Date Format
 
-**Problem:** "invalid since format" or "invalid before format"
-
-**Solutions:**
-- Use ISO 8601 format: `YYYY-MM-DDTHH:MM:SSZ`
-- Example: `2024-01-15T14:30:00Z`
+- Use ISO 8601: `2024-01-15T14:30:00Z`
 - Include timezone offset if not UTC: `2024-01-15T14:30:00-05:00`
 
-### Network Timeouts
+### Timeouts or Slow Responses
 
-**Problem:** Connection timeouts or slow responses
-
-**Solutions:**
 - Check your internet connection
-- iCloud IMAP/SMTP servers may be temporarily unavailable
-- The server has a 30-second timeout - wait and retry
-- Check if you can access icloud.com in your browser
-- Reduce `limit` parameter for searches if timeouts persist
+- Reduce the `limit` parameter for large result sets
+- Use `count_emails` first to gauge result size before searching
+- Use narrower date ranges with `since`/`before` or `last_days`
 
 ### Email Not Found
 
-**Problem:** "email not found" error
+- Email IDs (UIDs) are unique per folder -- make sure you are looking in the correct folder
+- The email may have been moved or deleted since the ID was retrieved
+- Use `search_emails` to find the current email ID
 
-**Solutions:**
-- Verify the email ID is correct (IDs are unique per folder)
-- Make sure you're searching in the correct folder
-- The email may have been moved or deleted
-- Use `search_emails` to find the correct email ID
-
-### Large Inbox Performance
-
-**Problem:** Slow searches or timeouts with large inbox
-
-**Solutions:**
-- Use the default `last_days` filter (30 days) to limit search scope
-- Reduce the `limit` parameter (default 50, max 200)
-- Use `count_emails` first to check how many emails match before fetching
-- Use more specific date ranges with `since` and `before` parameters
-- Server-side IMAP filtering helps, but very large result sets still take time
-
-## Architecture
-
-The server consists of:
-
-- **IMAP Client** (`imap/client.go`) - Handles iCloud IMAP protocol communication for reading emails
-- **SMTP Client** (`smtp/client.go`) - Handles iCloud SMTP protocol for sending emails
-- **Configuration** (`config/config.go`) - Loads and validates environment variables
-- **Tool Handlers** (`tools/*.go`) - Implements MCP tool logic for each operation
-- **Main Server** (`main.go`) - MCP server initialization and tool registration
-
-## Dependencies
-
-- [mcp-go](https://github.com/mark3labs/mcp-go) v0.43.2 - Official MCP Go SDK
-- [go-imap/v2](https://github.com/emersion/go-imap) - IMAP client library
-- [go-message](https://github.com/emersion/go-message) - Email parsing and formatting
-- [godotenv](https://github.com/joho/godotenv) v1.5.1 - Environment variable loader
-
-## Security Considerations
-
-- **Never commit your `.env` file to version control**
-- Use app-specific passwords, never your main iCloud password
-- App-specific passwords can be revoked at any time from appleid.apple.com
-- The server runs locally and doesn't send data to third parties
-- All communication with iCloud uses TLS encryption (IMAP port 993, SMTP with STARTTLS)
-- Email content may contain sensitive information - handle with care
-- Consider using secret management tools instead of environment variables in production
-- Environment variables can be logged or exposed - be cautious in shared environments
-
-## License
-
-MIT License - see [LICENSE](LICENSE) file for details.
+---
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome. Please open an issue to discuss larger changes before submitting a pull request.
 
-## Support
+---
 
-For issues, questions, or feature requests, please open an issue on [GitHub](https://github.com/rgabriel/mcp-icloud-email/issues).
+## License
 
-## Acknowledgments
-
-- Built with the official [mcp-go SDK](https://mcp-go.dev)
-- IMAP implementation using [go-imap/v2](https://github.com/emersion/go-imap)
-- Email parsing using [go-message](https://github.com/emersion/go-message)
-- Follows the [Model Context Protocol](https://modelcontextprotocol.io) specification
+MIT License -- see [LICENSE](LICENSE) for details.
