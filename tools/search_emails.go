@@ -11,7 +11,7 @@ import (
 )
 
 // SearchEmailsHandler creates a handler for searching emails
-func SearchEmailsHandler(client *imap.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func SearchEmailsHandler(client EmailReader) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 

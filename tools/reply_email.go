@@ -6,12 +6,11 @@ import (
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/rgabriel/mcp-icloud-email/imap"
 	"github.com/rgabriel/mcp-icloud-email/smtp"
 )
 
 // ReplyEmailHandler creates a handler for replying to emails
-func ReplyEmailHandler(imapClient *imap.Client, smtpClient *smtp.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func ReplyEmailHandler(imapClient EmailReader, smtpClient EmailSender) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 

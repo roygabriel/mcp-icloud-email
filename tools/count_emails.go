@@ -10,7 +10,7 @@ import (
 )
 
 // CountEmailsHandler creates a handler for counting emails
-func CountEmailsHandler(client *imap.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func CountEmailsHandler(client EmailReader) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 
