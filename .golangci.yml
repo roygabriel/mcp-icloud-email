@@ -1,4 +1,7 @@
+version: "2"
+
 linters:
+  default: none
   enable:
     - errcheck
     - govet
@@ -6,19 +9,16 @@ linters:
     - unused
     - ineffassign
     - gosec
-    - gosimple
     - gocritic
-
-linters-settings:
-  gosec:
-    excludes:
-      - G304 # File path provided as taint input - we validate save_path
-  errcheck:
-    check-blank: false
-
-issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck
-        - gosec
+  settings:
+    gosec:
+      excludes:
+        - G304 # File path provided as taint input - we validate save_path
+    errcheck:
+      check-blank: false
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
