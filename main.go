@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/rgabriel/mcp-icloud-email/config"
@@ -75,13 +76,14 @@ func main() {
 	// Create SMTP client
 	smtpClient := smtp.NewClient(cfg.ICloudEmail, cfg.ICloudPassword)
 
-	// Create MCP server with timeout middleware
+	// Create MCP server with middleware (applied in reverse: logging wraps timeout wraps handler)
 	s := server.NewMCPServer(
 		"iCloud Email Server",
 		version,
 		server.WithToolCapabilities(false),
 		server.WithRecovery(),
 		server.WithToolHandlerMiddleware(timeoutMiddleware(60*time.Second)),
+		server.WithToolHandlerMiddleware(loggingMiddleware()),
 	)
 
 	// Register search_emails tool
@@ -455,6 +457,33 @@ func timeoutMiddleware(timeout time.Duration) server.ToolHandlerMiddleware {
 			ctx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 			return next(ctx, req)
+		}
+	}
+}
+
+// loggingMiddleware logs each tool call with a unique request ID, tool name, duration, and outcome.
+func loggingMiddleware() server.ToolHandlerMiddleware {
+	return func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
+		return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			requestID := uuid.New().String()
+			tool := req.Params.Name
+			logger := slog.With("request_id", requestID, "tool", tool)
+
+			logger.Debug("tool call started")
+			start := time.Now()
+
+			result, err := next(ctx, req)
+			duration := time.Since(start)
+
+			if err != nil {
+				logger.Error("tool call failed", "duration_ms", duration.Milliseconds(), "error", err)
+			} else if result != nil && result.IsError {
+				logger.Warn("tool call returned error", "duration_ms", duration.Milliseconds())
+			} else {
+				logger.Info("tool call completed", "duration_ms", duration.Milliseconds())
+			}
+
+			return result, err
 		}
 	}
 }
