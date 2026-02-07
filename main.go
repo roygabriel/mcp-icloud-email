@@ -3,8 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
+	"os/signal"
+	"strings"
+	"syscall"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -14,25 +17,58 @@ import (
 	"github.com/rgabriel/mcp-icloud-email/tools"
 )
 
+// version is set at build time via ldflags
+var version = "dev"
+
 func main() {
+	// Initialize structured logging
+	logLevel := new(slog.LevelVar)
+	logLevel.Set(slog.LevelInfo)
+	if lvl := os.Getenv("LOG_LEVEL"); lvl != "" {
+		switch strings.ToUpper(lvl) {
+		case "DEBUG":
+			logLevel.Set(slog.LevelDebug)
+		case "WARN":
+			logLevel.Set(slog.LevelWarn)
+		case "ERROR":
+			logLevel.Set(slog.LevelError)
+		}
+	}
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))
+	slog.SetDefault(logger)
+
 	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("Configuration error: %v", err)
+		slog.Error("configuration error", "error", err)
+		os.Exit(1)
 	}
 
 	// Create IMAP client
 	imapClient, err := imap.NewClient(cfg.ICloudEmail, cfg.ICloudPassword)
 	if err != nil {
-		log.Fatalf("Failed to create IMAP client: %v", err)
+		slog.Error("failed to create IMAP client", "error", err)
+		os.Exit(1)
 	}
 	defer imapClient.Close()
 
+	// Set up signal handling for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		slog.Info("received signal, shutting down", "signal", sig)
+		cancel()
+	}()
+
 	// Test IMAP connection by listing folders
-	ctx := context.Background()
 	_, err = imapClient.ListFolders(ctx)
 	if err != nil {
-		log.Fatalf("Failed to connect to iCloud IMAP (check credentials): %v", err)
+		slog.Error("failed to connect to iCloud IMAP (check credentials)", "error", err)
+		os.Exit(1)
 	}
 
 	// Create SMTP client
@@ -306,13 +342,19 @@ func main() {
 	s.AddTool(flagEmailTool, tools.FlagEmailHandler(imapClient))
 
 	// Log startup
-	fmt.Fprintf(os.Stderr, "iCloud Email MCP Server v1.0.0 starting...\n")
-	fmt.Fprintf(os.Stderr, "Connected to iCloud as: %s\n", cfg.ICloudEmail)
-	fmt.Fprintf(os.Stderr, "IMAP: %s@%s:%d\n", cfg.ICloudEmail, "imap.mail.me.com", 993)
-	fmt.Fprintf(os.Stderr, "SMTP: %s@%s:%d\n", cfg.ICloudEmail, "smtp.mail.me.com", 587)
+	slog.Info("server starting",
+		"version", version,
+		"email", cfg.ICloudEmail,
+		"imap_server", fmt.Sprintf("imap.mail.me.com:%d", 993),
+		"smtp_server", fmt.Sprintf("smtp.mail.me.com:%d", 587),
+	)
 
-	// Start the stdio server
-	if err := server.ServeStdio(s); err != nil {
-		log.Fatalf("Server error: %v", err)
+	// Start the stdio server with cancellable context
+	stdioServer := server.NewStdioServer(s)
+	if err := stdioServer.Listen(ctx, os.Stdin, os.Stdout); err != nil {
+		slog.Error("server error", "error", err)
+		os.Exit(1)
 	}
+
+	slog.Info("server stopped")
 }
