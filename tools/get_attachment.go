@@ -9,11 +9,10 @@ import (
 	"path/filepath"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/rgabriel/mcp-icloud-email/imap"
 )
 
 // GetAttachmentHandler creates a handler for downloading email attachments
-func GetAttachmentHandler(imapClient *imap.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func GetAttachmentHandler(imapClient EmailReader) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 

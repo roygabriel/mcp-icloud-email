@@ -6,11 +6,10 @@ import (
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/rgabriel/mcp-icloud-email/imap"
 )
 
 // MoveEmailHandler creates a handler for moving emails between folders
-func MoveEmailHandler(client *imap.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func MoveEmailHandler(client EmailWriter) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 

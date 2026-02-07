@@ -6,11 +6,10 @@ import (
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/rgabriel/mcp-icloud-email/imap"
 )
 
 // CreateFolderHandler creates a handler for creating a new folder
-func CreateFolderHandler(client *imap.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func CreateFolderHandler(client EmailWriter) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 
@@ -52,7 +51,7 @@ func CreateFolderHandler(client *imap.Client) func(context.Context, mcp.CallTool
 }
 
 // DeleteFolderHandler creates a handler for deleting a folder
-func DeleteFolderHandler(client *imap.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func DeleteFolderHandler(client EmailWriter) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 
