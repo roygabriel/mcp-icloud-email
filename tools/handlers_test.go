@@ -263,6 +263,16 @@ func TestSearchEmailsHandler(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "offset passed to filters",
+			args: map[string]interface{}{"offset": float64(20)},
+			mock: &MockEmailService{Emails: emails},
+			checkMock: func(t *testing.T, m *MockEmailService) {
+				if m.LastFilters.Offset != 20 {
+					t.Errorf("offset = %d, want 20", m.LastFilters.Offset)
+				}
+			},
+		},
+		{
 			name:    "backend error",
 			args:    map[string]interface{}{},
 			mock:    newErrMock("IMAP error"),
@@ -286,6 +296,9 @@ func TestSearchEmailsHandler(t *testing.T) {
 			data := resultJSON(t, result)
 			if data["folder"] != tt.mock.LastFolder {
 				t.Errorf("response folder = %v, mock folder = %v", data["folder"], tt.mock.LastFolder)
+			}
+			if total, ok := data["total"].(float64); !ok || total < 0 {
+				t.Errorf("expected non-negative total in response, got %v", data["total"])
 			}
 			if tt.checkMock != nil {
 				tt.checkMock(t, tt.mock)

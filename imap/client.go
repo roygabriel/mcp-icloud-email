@@ -77,6 +77,7 @@ type EmailFilters struct {
 	Before     *time.Time
 	UnreadOnly bool
 	Limit      int
+	Offset     int
 }
 
 // NewClient creates a new IMAP client configured for iCloud
@@ -145,13 +146,13 @@ func (c *Client) listFolders() ([]string, error) {
 }
 
 // SearchEmails searches for emails in a folder with filters
-func (c *Client) SearchEmails(ctx context.Context, folder, query string, filters EmailFilters) ([]Email, error) {
+func (c *Client) SearchEmails(ctx context.Context, folder, query string, filters EmailFilters) ([]Email, int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	// Select the mailbox
 	if _, err := c.client.Select(folder, false); err != nil {
-		return nil, fmt.Errorf("failed to select folder %s: %w", folder, err)
+		return nil, 0, fmt.Errorf("failed to select folder %s: %w", folder, err)
 	}
 
 	// Build search criteria
@@ -182,16 +183,21 @@ func (c *Client) SearchEmails(ctx context.Context, folder, query string, filters
 	// Search for messages
 	uids, err := c.client.UidSearch(criteria)
 	if err != nil {
-		return nil, fmt.Errorf("failed to search emails: %w", err)
+		return nil, 0, fmt.Errorf("failed to search emails: %w", err)
 	}
 
-	if len(uids) == 0 {
-		return []Email{}, nil
+	total := len(uids)
+	if total == 0 {
+		return []Email{}, 0, nil
 	}
 
-	// Apply limit
+	// Apply offset and limit (UIDs are ascending, most recent = highest)
+	if filters.Offset > 0 && filters.Offset < len(uids) {
+		uids = uids[:len(uids)-filters.Offset]
+	} else if filters.Offset >= len(uids) {
+		return []Email{}, total, nil
+	}
 	if filters.Limit > 0 && len(uids) > filters.Limit {
-		// Get most recent emails (highest UIDs)
 		uids = uids[len(uids)-filters.Limit:]
 	}
 
@@ -215,10 +221,10 @@ func (c *Client) SearchEmails(ctx context.Context, folder, query string, filters
 	}
 
 	if err := <-done; err != nil {
-		return nil, fmt.Errorf("failed to fetch messages: %w", err)
+		return nil, 0, fmt.Errorf("failed to fetch messages: %w", err)
 	}
 
-	return emails, nil
+	return emails, total, nil
 }
 
 // GetEmail retrieves a full email by UID

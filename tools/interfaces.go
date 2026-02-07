@@ -10,7 +10,7 @@ import (
 // EmailReader defines read-only IMAP operations.
 type EmailReader interface {
 	ListFolders(ctx context.Context) ([]string, error)
-	SearchEmails(ctx context.Context, folder, query string, filters imap.EmailFilters) ([]imap.Email, error)
+	SearchEmails(ctx context.Context, folder, query string, filters imap.EmailFilters) ([]imap.Email, int, error)
 	GetEmail(ctx context.Context, folder, emailID string) (*imap.Email, error)
 	CountEmails(ctx context.Context, folder string, filters imap.EmailFilters) (int, error)
 	GetAttachment(ctx context.Context, folder, emailID, filename string) (*imap.AttachmentData, error)
