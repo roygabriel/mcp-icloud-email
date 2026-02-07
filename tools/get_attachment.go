@@ -21,11 +21,17 @@ func GetAttachmentHandler(imapClient EmailReader) func(context.Context, mcp.Call
 		if !ok || emailID == "" {
 			return mcp.NewToolResultError("email_id is required"), nil
 		}
+		if err := validateEmailID(emailID); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		// Get required filename
 		filename, ok := args["filename"].(string)
 		if !ok || filename == "" {
 			return mcp.NewToolResultError("filename is required"), nil
+		}
+		if err := validateFilename(filename); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		// Get folder (default to INBOX)
@@ -34,8 +40,11 @@ func GetAttachmentHandler(imapClient EmailReader) func(context.Context, mcp.Call
 			folder = "INBOX"
 		}
 
-		// Get optional save_path
+		// Get optional save_path and validate against path traversal
 		savePath, _ := args["save_path"].(string)
+		if err := validateSavePath(savePath); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		// Get attachment from IMAP
 		attachment, err := imapClient.GetAttachment(ctx, folder, emailID, filename)
