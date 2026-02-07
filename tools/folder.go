@@ -6,11 +6,10 @@ import (
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/rgabriel/mcp-icloud-email/imap"
 )
 
 // CreateFolderHandler creates a handler for creating a new folder
-func CreateFolderHandler(client *imap.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func CreateFolderHandler(client EmailWriter) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 
@@ -19,9 +18,17 @@ func CreateFolderHandler(client *imap.Client) func(context.Context, mcp.CallTool
 		if !ok || name == "" {
 			return mcp.NewToolResultError("name parameter is required"), nil
 		}
+		if err := validateFolderName(name); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		// Get parent folder (optional)
 		parent, _ := args["parent"].(string)
+		if parent != "" {
+			if err := validateFolderName(parent); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("invalid parent: %v", err)), nil
+			}
+		}
 
 		// Construct full folder path
 		folderPath := name
@@ -52,7 +59,7 @@ func CreateFolderHandler(client *imap.Client) func(context.Context, mcp.CallTool
 }
 
 // DeleteFolderHandler creates a handler for deleting a folder
-func DeleteFolderHandler(client *imap.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func DeleteFolderHandler(client EmailWriter) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 
@@ -60,6 +67,9 @@ func DeleteFolderHandler(client *imap.Client) func(context.Context, mcp.CallTool
 		name, ok := args["name"].(string)
 		if !ok || name == "" {
 			return mcp.NewToolResultError("name parameter is required"), nil
+		}
+		if err := validateFolderName(name); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		// Get force flag (optional, default false)

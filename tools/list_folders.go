@@ -6,11 +6,10 @@ import (
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/rgabriel/mcp-icloud-email/imap"
 )
 
 // ListFoldersHandler creates a handler for listing available folders
-func ListFoldersHandler(client *imap.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func ListFoldersHandler(client EmailReader) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		// List folders
 		folders, err := client.ListFolders(ctx)

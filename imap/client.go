@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/mail"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
+	"github.com/google/uuid"
 	message "github.com/emersion/go-message/mail"
 )
 
@@ -21,6 +24,7 @@ const (
 
 // Client wraps the IMAP client with iCloud-specific functionality
 type Client struct {
+	mu       sync.Mutex
 	client   *client.Client
 	username string
 }
@@ -73,6 +77,7 @@ type EmailFilters struct {
 	Before     *time.Time
 	UnreadOnly bool
 	Limit      int
+	Offset     int
 }
 
 // NewClient creates a new IMAP client configured for iCloud
@@ -86,13 +91,13 @@ func NewClient(email, password string) (*Client, error) {
 
 	// Login
 	if err := c.Login(email, password); err != nil {
-		c.Logout()
+		_ = c.Logout()
 		return nil, fmt.Errorf("failed to login: %w", err)
 	}
 
 	// Test connection by selecting INBOX
 	if _, err := c.Select("INBOX", false); err != nil {
-		c.Logout()
+		_ = c.Logout()
 		return nil, fmt.Errorf("failed to select INBOX: %w", err)
 	}
 
@@ -104,6 +109,8 @@ func NewClient(email, password string) (*Client, error) {
 
 // Close closes the IMAP connection
 func (c *Client) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.client != nil {
 		return c.client.Logout()
 	}
@@ -112,9 +119,16 @@ func (c *Client) Close() error {
 
 // ListFolders lists all available mailboxes/folders
 func (c *Client) ListFolders(ctx context.Context) ([]string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.listFolders()
+}
+
+// listFolders is the internal implementation (caller must hold c.mu)
+func (c *Client) listFolders() ([]string, error) {
 	mailboxes := make(chan *imap.MailboxInfo, 10)
 	done := make(chan error, 1)
-	
+
 	go func() {
 		done <- c.client.List("", "*", mailboxes)
 	}()
@@ -132,10 +146,13 @@ func (c *Client) ListFolders(ctx context.Context) ([]string, error) {
 }
 
 // SearchEmails searches for emails in a folder with filters
-func (c *Client) SearchEmails(ctx context.Context, folder, query string, filters EmailFilters) ([]Email, error) {
+func (c *Client) SearchEmails(ctx context.Context, folder, query string, filters EmailFilters) ([]Email, int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	// Select the mailbox
 	if _, err := c.client.Select(folder, false); err != nil {
-		return nil, fmt.Errorf("failed to select folder %s: %w", folder, err)
+		return nil, 0, fmt.Errorf("failed to select folder %s: %w", folder, err)
 	}
 
 	// Build search criteria
@@ -166,16 +183,21 @@ func (c *Client) SearchEmails(ctx context.Context, folder, query string, filters
 	// Search for messages
 	uids, err := c.client.UidSearch(criteria)
 	if err != nil {
-		return nil, fmt.Errorf("failed to search emails: %w", err)
+		return nil, 0, fmt.Errorf("failed to search emails: %w", err)
 	}
 
-	if len(uids) == 0 {
-		return []Email{}, nil
+	total := len(uids)
+	if total == 0 {
+		return []Email{}, 0, nil
 	}
 
-	// Apply limit
+	// Apply offset and limit (UIDs are ascending, most recent = highest)
+	if filters.Offset > 0 && filters.Offset < len(uids) {
+		uids = uids[:len(uids)-filters.Offset]
+	} else if filters.Offset >= len(uids) {
+		return []Email{}, total, nil
+	}
 	if filters.Limit > 0 && len(uids) > filters.Limit {
-		// Get most recent emails (highest UIDs)
 		uids = uids[len(uids)-filters.Limit:]
 	}
 
@@ -199,14 +221,21 @@ func (c *Client) SearchEmails(ctx context.Context, folder, query string, filters
 	}
 
 	if err := <-done; err != nil {
-		return nil, fmt.Errorf("failed to fetch messages: %w", err)
+		return nil, 0, fmt.Errorf("failed to fetch messages: %w", err)
 	}
 
-	return emails, nil
+	return emails, total, nil
 }
 
 // GetEmail retrieves a full email by UID
 func (c *Client) GetEmail(ctx context.Context, folder, emailID string) (*Email, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.getEmail(folder, emailID)
+}
+
+// getEmail is the internal implementation (caller must hold c.mu)
+func (c *Client) getEmail(folder, emailID string) (*Email, error) {
 	// Select the mailbox
 	if _, err := c.client.Select(folder, false); err != nil {
 		return nil, fmt.Errorf("failed to select folder %s: %w", folder, err)
@@ -237,7 +266,7 @@ func (c *Client) GetEmail(ctx context.Context, folder, emailID string) (*Email, 
 	}
 
 	email := c.parseMessageData(msg, true)
-	
+
 	if err := <-done; err != nil {
 		return nil, fmt.Errorf("failed to fetch message: %w", err)
 	}
@@ -251,6 +280,13 @@ func (c *Client) GetEmail(ctx context.Context, folder, emailID string) (*Email, 
 
 // CountEmails counts emails matching filters
 func (c *Client) CountEmails(ctx context.Context, folder string, filters EmailFilters) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.countEmails(folder, filters)
+}
+
+// countEmails is the internal implementation (caller must hold c.mu)
+func (c *Client) countEmails(folder string, filters EmailFilters) (int, error) {
 	// Select the mailbox
 	if _, err := c.client.Select(folder, false); err != nil {
 		return 0, fmt.Errorf("failed to select folder %s: %w", folder, err)
@@ -285,6 +321,9 @@ func (c *Client) CountEmails(ctx context.Context, folder string, filters EmailFi
 
 // MarkRead marks an email as read or unread
 func (c *Client) MarkRead(ctx context.Context, folder, emailID string, read bool) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	// Select the mailbox
 	if _, err := c.client.Select(folder, false); err != nil {
 		return fmt.Errorf("failed to select folder %s: %w", folder, err)
@@ -318,6 +357,13 @@ func (c *Client) MarkRead(ctx context.Context, folder, emailID string, read bool
 
 // MoveEmail moves an email from one folder to another
 func (c *Client) MoveEmail(ctx context.Context, fromFolder, toFolder, emailID string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.moveEmail(fromFolder, toFolder, emailID)
+}
+
+// moveEmail is the internal implementation (caller must hold c.mu)
+func (c *Client) moveEmail(fromFolder, toFolder, emailID string) error {
 	// Select the source mailbox
 	if _, err := c.client.Select(fromFolder, false); err != nil {
 		return fmt.Errorf("failed to select folder %s: %w", fromFolder, err)
@@ -340,14 +386,14 @@ func (c *Client) MoveEmail(ctx context.Context, fromFolder, toFolder, emailID st
 		if err := c.client.UidCopy(seqSet, toFolder); err != nil {
 			return fmt.Errorf("failed to copy email: %w", err)
 		}
-		
+
 		// Mark as deleted
 		item := imap.FormatFlagsOp(imap.AddFlags, true)
 		flags := []interface{}{imap.DeletedFlag}
 		if err := c.client.UidStore(seqSet, item, flags, nil); err != nil {
 			return fmt.Errorf("failed to mark email as deleted: %w", err)
 		}
-		
+
 		// Expunge to remove it
 		if err := c.client.Expunge(nil); err != nil {
 			return fmt.Errorf("failed to expunge: %w", err)
@@ -359,6 +405,9 @@ func (c *Client) MoveEmail(ctx context.Context, fromFolder, toFolder, emailID st
 
 // DeleteEmail deletes an email (moves to trash or permanently deletes)
 func (c *Client) DeleteEmail(ctx context.Context, folder, emailID string, permanent bool) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if permanent {
 		// Select the mailbox
 		if _, err := c.client.Select(folder, false); err != nil {
@@ -387,12 +436,12 @@ func (c *Client) DeleteEmail(ctx context.Context, folder, emailID string, perman
 			return fmt.Errorf("failed to expunge: %w", err)
 		}
 	} else {
-		// Move to Trash folder
+		// Move to Trash folder (use internal moveEmail to avoid deadlock)
 		trashFolder := "Deleted Messages"
-		if err := c.MoveEmail(ctx, folder, trashFolder, emailID); err != nil {
+		if err := c.moveEmail(folder, trashFolder, emailID); err != nil {
 			// Try alternate trash folder name
 			trashFolder = "Trash"
-			if err := c.MoveEmail(ctx, folder, trashFolder, emailID); err != nil {
+			if err := c.moveEmail(folder, trashFolder, emailID); err != nil {
 				return fmt.Errorf("failed to move to trash: %w", err)
 			}
 		}
@@ -480,12 +529,14 @@ func (c *Client) parseEmailBody(email *Email, bodyLiteral imap.Literal) {
 	
 	msg, err := mail.ReadMessage(bodyLiteral)
 	if err != nil {
+		slog.Warn("failed to read email message", "error", err)
 		return
 	}
 
 	// Parse the message using go-message
 	mr, err := message.CreateReader(msg.Body)
 	if err != nil {
+		slog.Warn("failed to create message reader", "error", err)
 		return
 	}
 
@@ -519,6 +570,7 @@ func (c *Client) processMessagePart(email *Email, mr *message.Reader) {
 			break
 		}
 		if err != nil {
+			slog.Warn("failed to read message part", "error", err)
 			return
 		}
 
@@ -563,12 +615,15 @@ func (c *Client) GetUsername() string {
 
 // SaveDraft saves an email as a draft in the Drafts folder
 func (c *Client) SaveDraft(ctx context.Context, from string, to []string, subject, body string, opts DraftOptions) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	// Try common draft folder names
 	draftFolders := []string{"Drafts", "INBOX.Drafts", "[Gmail]/Drafts"}
 	var draftFolder string
-	
+
 	// Find which draft folder exists
-	folders, err := c.ListFolders(ctx)
+	folders, err := c.listFolders()
 	if err != nil {
 		return "", fmt.Errorf("failed to list folders: %w", err)
 	}
@@ -611,13 +666,13 @@ func (c *Client) SaveDraft(ctx context.Context, from string, to []string, subjec
 			folder = "INBOX"
 		}
 		
-		originalEmail, err := c.GetEmail(ctx, folder, opts.ReplyToID)
+		originalEmail, err := c.getEmail(folder, opts.ReplyToID)
 		if err != nil {
 			return "", fmt.Errorf("failed to get original email for reply: %w", err)
 		}
 		
 		// Build reply subject
-		replySubject := subject
+		var replySubject string
 		if !strings.HasPrefix(strings.ToLower(originalEmail.Subject), "re:") {
 			replySubject = "Re: " + originalEmail.Subject
 		} else {
@@ -646,7 +701,7 @@ func (c *Client) SaveDraft(ctx context.Context, from string, to []string, subjec
 	buf.WriteString(fmt.Sprintf("Date: %s\r\n", time.Now().Format(time.RFC1123Z)))
 	
 	// Generate Message-ID
-	messageID := fmt.Sprintf("<%d.%s@mcp-icloud-email>", time.Now().UnixNano(), c.username)
+	messageID := fmt.Sprintf("<%s.%s@mcp-icloud-email>", uuid.New().String(), c.username)
 	buf.WriteString(fmt.Sprintf("Message-ID: %s\r\n", messageID))
 	
 	// Content type
@@ -681,6 +736,9 @@ func (c *Client) SaveDraft(ctx context.Context, from string, to []string, subjec
 
 // GetAttachment downloads a specific attachment from an email
 func (c *Client) GetAttachment(ctx context.Context, folder, emailID, filename string) (*AttachmentData, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	// Select the mailbox
 	if _, err := c.client.Select(folder, false); err != nil {
 		return nil, fmt.Errorf("failed to select folder %s: %w", folder, err)
@@ -769,8 +827,7 @@ func (c *Client) GetAttachment(ctx context.Context, folder, emailID, filename st
 			return nil, fmt.Errorf("failed to read message part: %w", err)
 		}
 
-		switch h := part.Header.(type) {
-		case *message.AttachmentHeader:
+		if h, ok := part.Header.(*message.AttachmentHeader); ok {
 			attachFilename, _ := h.Filename()
 			if attachFilename == filename {
 				// Found the attachment
@@ -796,6 +853,9 @@ func (c *Client) GetAttachment(ctx context.Context, folder, emailID, filename st
 
 // FlagEmail sets or removes flags on an email
 func (c *Client) FlagEmail(ctx context.Context, folder, emailID, flagType, color string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	// Select the mailbox
 	if _, err := c.client.Select(folder, false); err != nil {
 		return fmt.Errorf("failed to select folder %s: %w", folder, err)
@@ -878,6 +938,9 @@ func (c *Client) FlagEmail(ctx context.Context, folder, emailID, flagType, color
 
 // CreateFolder creates a new mailbox folder
 func (c *Client) CreateFolder(ctx context.Context, name, parent string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	// Construct full folder path
 	folderPath := name
 	if parent != "" {
@@ -894,8 +957,11 @@ func (c *Client) CreateFolder(ctx context.Context, name, parent string) error {
 
 // DeleteFolder deletes a mailbox folder
 func (c *Client) DeleteFolder(ctx context.Context, name string, force bool) (wasEmpty bool, emailCount int, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	// Check if folder exists and count emails
-	count, countErr := c.CountEmails(ctx, name, EmailFilters{})
+	count, countErr := c.countEmails(name, EmailFilters{})
 	if countErr != nil {
 		// If we can't select the folder, it might not exist
 		err = fmt.Errorf("failed to access folder %s: %w", name, countErr)
