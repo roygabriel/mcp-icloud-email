@@ -1,0 +1,15 @@
+.git
+.github
+.gitignore
+.dockerignore
+.env
+.vscode
+.idea
+*.md
+docs/
+coverage.out
+coverage.html
+report.json
+sonar-project.properties
+.golangci.yml
+Makefile
