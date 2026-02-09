@@ -2,13 +2,19 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 LDFLAGS := -ldflags "-s -w -X main.version=$(VERSION)"
 BINARY := mcp-icloud-email
 
-.PHONY: build test lint clean run vet
+.PHONY: build test cover lint clean run vet
 
 build:
 	CGO_ENABLED=0 go build $(LDFLAGS) -o $(BINARY) .
 
 test:
-	go test -race ./...
+	go test -race -coverprofile=coverage.out -covermode=atomic ./...
+	@echo ""
+	@go tool cover -func=coverage.out | grep ^total:
+
+cover: test
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report: coverage.html"
 
 vet:
 	go vet ./...
@@ -17,7 +23,7 @@ lint:
 	golangci-lint run ./...
 
 clean:
-	rm -f $(BINARY)
+	rm -f $(BINARY) coverage.out coverage.html
 
 run: build
 	./$(BINARY)

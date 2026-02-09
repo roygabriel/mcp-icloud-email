@@ -18,10 +18,14 @@ const (
 	smtpPort   = 587
 )
 
+// SendMailFunc is the function signature for sending mail via SMTP.
+type SendMailFunc func(addr string, a smtp.Auth, from string, to []string, msg []byte) error
+
 // Client handles SMTP operations for sending emails
 type Client struct {
 	username string
 	password string
+	sendMail SendMailFunc
 }
 
 // SendOptions contains optional parameters for sending emails
@@ -37,6 +41,7 @@ func NewClient(username, password string) *Client {
 	return &Client{
 		username: username,
 		password: password,
+		sendMail: smtp.SendMail,
 	}
 }
 
@@ -157,7 +162,7 @@ func (c *Client) SendEmail(ctx context.Context, from string, to []string, subjec
 	addr := fmt.Sprintf("%s:%d", smtpServer, smtpPort)
 	auth := smtp.PlainAuth("", c.username, c.password, smtpServer)
 
-	err = smtp.SendMail(addr, auth, from, recipients, buf.Bytes())
+	err = c.sendMail(addr, auth, from, recipients, buf.Bytes())
 	if err != nil {
 		return fmt.Errorf("failed to send email: %w", err)
 	}
