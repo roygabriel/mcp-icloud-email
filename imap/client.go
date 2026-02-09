@@ -22,11 +22,36 @@ const (
 	timeout    = 30 * time.Second
 )
 
+// IMAPBackend abstracts the IMAP protocol operations for testability.
+// The real *client.Client from go-imap satisfies this interface implicitly.
+type IMAPBackend interface {
+	List(ref, name string, ch chan *imap.MailboxInfo) error
+	Select(name string, readOnly bool) (*imap.MailboxStatus, error)
+	UidSearch(criteria *imap.SearchCriteria) ([]uint32, error)
+	UidFetch(seqset *imap.SeqSet, items []imap.FetchItem, ch chan *imap.Message) error
+	UidStore(seqset *imap.SeqSet, item imap.StoreItem, value interface{}, ch chan *imap.Message) error
+	UidMove(seqset *imap.SeqSet, dest string) error
+	UidCopy(seqset *imap.SeqSet, dest string) error
+	Expunge(ch chan uint32) error
+	Append(mbox string, flags []string, date time.Time, msg imap.Literal) error
+	Create(name string) error
+	Delete(name string) error
+	Logout() error
+}
+
 // Client wraps the IMAP client with iCloud-specific functionality
 type Client struct {
 	mu       sync.Mutex
-	client   *client.Client
+	backend  IMAPBackend
 	username string
+}
+
+// NewClientWithBackend creates a Client with a custom backend (for testing).
+func NewClientWithBackend(backend IMAPBackend, username string) *Client {
+	return &Client{
+		backend:  backend,
+		username: username,
+	}
 }
 
 // Email represents a complete email message
@@ -102,7 +127,7 @@ func NewClient(email, password string) (*Client, error) {
 	}
 
 	return &Client{
-		client:   c,
+		backend:  c,
 		username: email,
 	}, nil
 }
@@ -111,8 +136,8 @@ func NewClient(email, password string) (*Client, error) {
 func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.client != nil {
-		return c.client.Logout()
+	if c.backend != nil {
+		return c.backend.Logout()
 	}
 	return nil
 }
@@ -130,7 +155,7 @@ func (c *Client) listFolders() ([]string, error) {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- c.client.List("", "*", mailboxes)
+		done <- c.backend.List("", "*", mailboxes)
 	}()
 
 	folders := []string{}
@@ -151,7 +176,7 @@ func (c *Client) SearchEmails(ctx context.Context, folder, query string, filters
 	defer c.mu.Unlock()
 
 	// Select the mailbox
-	if _, err := c.client.Select(folder, false); err != nil {
+	if _, err := c.backend.Select(folder, false); err != nil {
 		return nil, 0, fmt.Errorf("failed to select folder %s: %w", folder, err)
 	}
 
@@ -181,7 +206,7 @@ func (c *Client) SearchEmails(ctx context.Context, folder, query string, filters
 	}
 
 	// Search for messages
-	uids, err := c.client.UidSearch(criteria)
+	uids, err := c.backend.UidSearch(criteria)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to search emails: %w", err)
 	}
@@ -209,7 +234,7 @@ func (c *Client) SearchEmails(ctx context.Context, folder, query string, filters
 	messages := make(chan *imap.Message, 10)
 	done := make(chan error, 1)
 	go func() {
-		done <- c.client.UidFetch(seqSet, []imap.FetchItem{imap.FetchEnvelope, imap.FetchFlags, imap.FetchUid}, messages)
+		done <- c.backend.UidFetch(seqSet, []imap.FetchItem{imap.FetchEnvelope, imap.FetchFlags, imap.FetchUid}, messages)
 	}()
 
 	emails := []Email{}
@@ -237,7 +262,7 @@ func (c *Client) GetEmail(ctx context.Context, folder, emailID string) (*Email, 
 // getEmail is the internal implementation (caller must hold c.mu)
 func (c *Client) getEmail(folder, emailID string) (*Email, error) {
 	// Select the mailbox
-	if _, err := c.client.Select(folder, false); err != nil {
+	if _, err := c.backend.Select(folder, false); err != nil {
 		return nil, fmt.Errorf("failed to select folder %s: %w", folder, err)
 	}
 
@@ -256,7 +281,7 @@ func (c *Client) getEmail(folder, emailID string) (*Email, error) {
 	done := make(chan error, 1)
 	section := &imap.BodySectionName{}
 	go func() {
-		done <- c.client.UidFetch(seqSet, []imap.FetchItem{imap.FetchEnvelope, imap.FetchFlags, imap.FetchUid, section.FetchItem()}, messages)
+		done <- c.backend.UidFetch(seqSet, []imap.FetchItem{imap.FetchEnvelope, imap.FetchFlags, imap.FetchUid, section.FetchItem()}, messages)
 	}()
 
 	msg := <-messages
@@ -288,7 +313,7 @@ func (c *Client) CountEmails(ctx context.Context, folder string, filters EmailFi
 // countEmails is the internal implementation (caller must hold c.mu)
 func (c *Client) countEmails(folder string, filters EmailFilters) (int, error) {
 	// Select the mailbox
-	if _, err := c.client.Select(folder, false); err != nil {
+	if _, err := c.backend.Select(folder, false); err != nil {
 		return 0, fmt.Errorf("failed to select folder %s: %w", folder, err)
 	}
 
@@ -311,7 +336,7 @@ func (c *Client) countEmails(folder string, filters EmailFilters) (int, error) {
 	}
 
 	// Search for messages
-	uids, err := c.client.UidSearch(criteria)
+	uids, err := c.backend.UidSearch(criteria)
 	if err != nil {
 		return 0, fmt.Errorf("failed to search emails: %w", err)
 	}
@@ -325,7 +350,7 @@ func (c *Client) MarkRead(ctx context.Context, folder, emailID string, read bool
 	defer c.mu.Unlock()
 
 	// Select the mailbox
-	if _, err := c.client.Select(folder, false); err != nil {
+	if _, err := c.backend.Select(folder, false); err != nil {
 		return fmt.Errorf("failed to select folder %s: %w", folder, err)
 	}
 
@@ -348,7 +373,7 @@ func (c *Client) MarkRead(ctx context.Context, folder, emailID string, read bool
 	}
 	
 	flags := []interface{}{imap.SeenFlag}
-	if err := c.client.UidStore(seqSet, item, flags, nil); err != nil {
+	if err := c.backend.UidStore(seqSet, item, flags, nil); err != nil {
 		return fmt.Errorf("failed to mark email: %w", err)
 	}
 
@@ -365,7 +390,7 @@ func (c *Client) MoveEmail(ctx context.Context, fromFolder, toFolder, emailID st
 // moveEmail is the internal implementation (caller must hold c.mu)
 func (c *Client) moveEmail(fromFolder, toFolder, emailID string) error {
 	// Select the source mailbox
-	if _, err := c.client.Select(fromFolder, false); err != nil {
+	if _, err := c.backend.Select(fromFolder, false); err != nil {
 		return fmt.Errorf("failed to select folder %s: %w", fromFolder, err)
 	}
 
@@ -381,21 +406,21 @@ func (c *Client) moveEmail(fromFolder, toFolder, emailID string) error {
 
 	// Try to use MOVE command (if supported)
 	// Otherwise fall back to COPY + DELETE
-	if err := c.client.UidMove(seqSet, toFolder); err != nil {
+	if err := c.backend.UidMove(seqSet, toFolder); err != nil {
 		// Fallback: Copy then mark as deleted
-		if err := c.client.UidCopy(seqSet, toFolder); err != nil {
+		if err := c.backend.UidCopy(seqSet, toFolder); err != nil {
 			return fmt.Errorf("failed to copy email: %w", err)
 		}
 
 		// Mark as deleted
 		item := imap.FormatFlagsOp(imap.AddFlags, true)
 		flags := []interface{}{imap.DeletedFlag}
-		if err := c.client.UidStore(seqSet, item, flags, nil); err != nil {
+		if err := c.backend.UidStore(seqSet, item, flags, nil); err != nil {
 			return fmt.Errorf("failed to mark email as deleted: %w", err)
 		}
 
 		// Expunge to remove it
-		if err := c.client.Expunge(nil); err != nil {
+		if err := c.backend.Expunge(nil); err != nil {
 			return fmt.Errorf("failed to expunge: %w", err)
 		}
 	}
@@ -410,7 +435,7 @@ func (c *Client) DeleteEmail(ctx context.Context, folder, emailID string, perman
 
 	if permanent {
 		// Select the mailbox
-		if _, err := c.client.Select(folder, false); err != nil {
+		if _, err := c.backend.Select(folder, false); err != nil {
 			return fmt.Errorf("failed to select folder %s: %w", folder, err)
 		}
 
@@ -427,12 +452,12 @@ func (c *Client) DeleteEmail(ctx context.Context, folder, emailID string, perman
 		// Mark as deleted
 		item := imap.FormatFlagsOp(imap.AddFlags, true)
 		flags := []interface{}{imap.DeletedFlag}
-		if err := c.client.UidStore(seqSet, item, flags, nil); err != nil {
+		if err := c.backend.UidStore(seqSet, item, flags, nil); err != nil {
 			return fmt.Errorf("failed to mark email as deleted: %w", err)
 		}
 
 		// Expunge to permanently delete
-		if err := c.client.Expunge(nil); err != nil {
+		if err := c.backend.Expunge(nil); err != nil {
 			return fmt.Errorf("failed to expunge: %w", err)
 		}
 	} else {
@@ -718,12 +743,12 @@ func (c *Client) SaveDraft(ctx context.Context, from string, to []string, subjec
 	flags := []string{imap.DraftFlag}
 	date := time.Now()
 	
-	if err := c.client.Append(draftFolder, flags, date, strings.NewReader(buf.String())); err != nil {
+	if err := c.backend.Append(draftFolder, flags, date, strings.NewReader(buf.String())); err != nil {
 		return "", fmt.Errorf("failed to append draft: %w", err)
 	}
 	
 	// Get the UID of the appended message (select folder and get last message)
-	mbox, err := c.client.Select(draftFolder, false)
+	mbox, err := c.backend.Select(draftFolder, false)
 	if err != nil {
 		return "", fmt.Errorf("failed to select draft folder: %w", err)
 	}
@@ -740,7 +765,7 @@ func (c *Client) GetAttachment(ctx context.Context, folder, emailID, filename st
 	defer c.mu.Unlock()
 
 	// Select the mailbox
-	if _, err := c.client.Select(folder, false); err != nil {
+	if _, err := c.backend.Select(folder, false); err != nil {
 		return nil, fmt.Errorf("failed to select folder %s: %w", folder, err)
 	}
 
@@ -759,7 +784,7 @@ func (c *Client) GetAttachment(ctx context.Context, folder, emailID, filename st
 	done := make(chan error, 1)
 	
 	go func() {
-		done <- c.client.UidFetch(seqSet, []imap.FetchItem{imap.FetchBodyStructure}, messages)
+		done <- c.backend.UidFetch(seqSet, []imap.FetchItem{imap.FetchBodyStructure}, messages)
 	}()
 
 	msg := <-messages
@@ -782,7 +807,7 @@ func (c *Client) GetAttachment(ctx context.Context, folder, emailID, filename st
 	section := &imap.BodySectionName{}
 	
 	go func() {
-		done2 <- c.client.UidFetch(seqSet, []imap.FetchItem{section.FetchItem()}, messages2)
+		done2 <- c.backend.UidFetch(seqSet, []imap.FetchItem{section.FetchItem()}, messages2)
 	}()
 
 	msg2 := <-messages2
@@ -857,7 +882,7 @@ func (c *Client) FlagEmail(ctx context.Context, folder, emailID, flagType, color
 	defer c.mu.Unlock()
 
 	// Select the mailbox
-	if _, err := c.client.Select(folder, false); err != nil {
+	if _, err := c.backend.Select(folder, false); err != nil {
 		return fmt.Errorf("failed to select folder %s: %w", folder, err)
 	}
 
@@ -888,7 +913,7 @@ func (c *Client) FlagEmail(ctx context.Context, folder, emailID, flagType, color
 		}
 		
 		// Try to remove flags (may fail if keywords not supported, which is ok)
-		_ = c.client.UidStore(seqSet, item, flags, nil)
+		_ = c.backend.UidStore(seqSet, item, flags, nil)
 		return nil
 	}
 
@@ -929,7 +954,7 @@ func (c *Client) FlagEmail(ctx context.Context, folder, emailID, flagType, color
 
 	// Set the flags
 	item := imap.FormatFlagsOp(imap.AddFlags, true)
-	if err := c.client.UidStore(seqSet, item, flags, nil); err != nil {
+	if err := c.backend.UidStore(seqSet, item, flags, nil); err != nil {
 		return fmt.Errorf("failed to set flags: %w", err)
 	}
 
@@ -948,7 +973,7 @@ func (c *Client) CreateFolder(ctx context.Context, name, parent string) error {
 	}
 
 	// Create the folder
-	if err := c.client.Create(folderPath); err != nil {
+	if err := c.backend.Create(folderPath); err != nil {
 		return fmt.Errorf("failed to create folder %s: %w", folderPath, err)
 	}
 
@@ -974,7 +999,7 @@ func (c *Client) DeleteFolder(ctx context.Context, name string, force bool) (was
 	}
 
 	// Delete the folder
-	if deleteErr := c.client.Delete(name); deleteErr != nil {
+	if deleteErr := c.backend.Delete(name); deleteErr != nil {
 		err = fmt.Errorf("failed to delete folder %s: %w", name, deleteErr)
 		return false, count, err
 	}
