@@ -3,6 +3,7 @@ package imap
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,6 +25,13 @@ type MockBackend struct {
 
 	UidFetchMessages []*goiMap.Message
 	UidFetchErr      error
+
+	// Multi-call support: each UidFetch call pops from this slice.
+	// When empty, falls back to UidFetchMessages/UidFetchErr.
+	UidFetchCallResults []struct {
+		Messages []*goiMap.Message
+		Err      error
+	}
 
 	UidStoreErr error
 	UidMoveErr  error
@@ -79,6 +87,18 @@ func (m *MockBackend) UidSearch(criteria *goiMap.SearchCriteria) ([]uint32, erro
 
 func (m *MockBackend) UidFetch(seqset *goiMap.SeqSet, items []goiMap.FetchItem, ch chan *goiMap.Message) error {
 	m.UidFetchCalls++
+
+	// Use per-call results if available
+	if len(m.UidFetchCallResults) > 0 {
+		result := m.UidFetchCallResults[0]
+		m.UidFetchCallResults = m.UidFetchCallResults[1:]
+		for _, msg := range result.Messages {
+			ch <- msg
+		}
+		close(ch)
+		return result.Err
+	}
+
 	for _, msg := range m.UidFetchMessages {
 		ch <- msg
 	}
@@ -1425,14 +1445,22 @@ func TestGetAttachment(t *testing.T) {
 
 	t.Run("email not found first fetch", func(t *testing.T) {
 		mb := &MockBackend{
-			SelectStatus:     okStatus,
-			UidFetchMessages: []*goiMap.Message{},
+			SelectStatus: okStatus,
+			UidFetchCallResults: []struct {
+				Messages []*goiMap.Message
+				Err      error
+			}{
+				{Messages: []*goiMap.Message{}, Err: nil}, // first fetch: no messages
+			},
 		}
 		c := newTestClient(mb)
 
 		_, err := c.GetAttachment(ctx, "INBOX", "100", "test.pdf")
 		if err == nil {
 			t.Fatal("expected error")
+		}
+		if err.Error() != "email not found" {
+			t.Errorf("error = %q", err.Error())
 		}
 	})
 
@@ -1458,15 +1486,163 @@ func TestGetAttachment(t *testing.T) {
 
 	t.Run("fetch structure error", func(t *testing.T) {
 		mb := &MockBackend{
-			SelectStatus:     okStatus,
-			UidFetchMessages: []*goiMap.Message{{Uid: 100}},
-			UidFetchErr:      errors.New("fetch failed"),
+			SelectStatus: okStatus,
+			UidFetchCallResults: []struct {
+				Messages []*goiMap.Message
+				Err      error
+			}{
+				{Messages: []*goiMap.Message{{Uid: 100}}, Err: errors.New("fetch failed")},
+			},
 		}
 		c := newTestClient(mb)
 
 		_, err := c.GetAttachment(ctx, "INBOX", "100", "test.pdf")
 		if err == nil {
 			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("email not found second fetch", func(t *testing.T) {
+		mb := &MockBackend{
+			SelectStatus: okStatus,
+			UidFetchCallResults: []struct {
+				Messages []*goiMap.Message
+				Err      error
+			}{
+				{Messages: []*goiMap.Message{{Uid: 100}}, Err: nil},  // first: BODYSTRUCTURE
+				{Messages: []*goiMap.Message{}, Err: nil},            // second: body - empty
+			},
+		}
+		c := newTestClient(mb)
+
+		_, err := c.GetAttachment(ctx, "INBOX", "100", "test.pdf")
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if err.Error() != "email not found" {
+			t.Errorf("error = %q", err.Error())
+		}
+	})
+
+	t.Run("second fetch error", func(t *testing.T) {
+		mb := &MockBackend{
+			SelectStatus: okStatus,
+			UidFetchCallResults: []struct {
+				Messages []*goiMap.Message
+				Err      error
+			}{
+				{Messages: []*goiMap.Message{{Uid: 100}}, Err: nil},
+				{Messages: []*goiMap.Message{{Uid: 100}}, Err: errors.New("body fetch failed")},
+			},
+		}
+		c := newTestClient(mb)
+
+		_, err := c.GetAttachment(ctx, "INBOX", "100", "test.pdf")
+		if err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("no body literal", func(t *testing.T) {
+		mb := &MockBackend{
+			SelectStatus: okStatus,
+			UidFetchCallResults: []struct {
+				Messages []*goiMap.Message
+				Err      error
+			}{
+				{Messages: []*goiMap.Message{{Uid: 100}}, Err: nil},
+				{Messages: []*goiMap.Message{{Uid: 100, Body: map[*goiMap.BodySectionName]goiMap.Literal{}}}, Err: nil},
+			},
+		}
+		c := newTestClient(mb)
+
+		_, err := c.GetAttachment(ctx, "INBOX", "100", "test.pdf")
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if err.Error() != "failed to get message body" {
+			t.Errorf("error = %q", err.Error())
+		}
+	})
+
+	t.Run("malformed body", func(t *testing.T) {
+		section := &goiMap.BodySectionName{}
+		mb := &MockBackend{
+			SelectStatus: okStatus,
+			UidFetchCallResults: []struct {
+				Messages []*goiMap.Message
+				Err      error
+			}{
+				{Messages: []*goiMap.Message{{Uid: 100}}, Err: nil},
+				{Messages: []*goiMap.Message{{
+					Uid: 100,
+					Body: map[*goiMap.BodySectionName]goiMap.Literal{
+						section: strings.NewReader("not a valid email"),
+					},
+				}}, Err: nil},
+			},
+		}
+		c := newTestClient(mb)
+
+		_, err := c.GetAttachment(ctx, "INBOX", "100", "test.pdf")
+		if err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("parse error in body", func(t *testing.T) {
+		section := &goiMap.BodySectionName{}
+		// A valid email with headers but body content that go-message can't parse as MIME
+		emailContent := "From: sender@example.com\r\n" +
+			"To: test@icloud.com\r\n" +
+			"Subject: Test\r\n" +
+			"\r\n" +
+			"plain body content\r\n"
+		mb := &MockBackend{
+			SelectStatus: okStatus,
+			UidFetchCallResults: []struct {
+				Messages []*goiMap.Message
+				Err      error
+			}{
+				{Messages: []*goiMap.Message{{Uid: 100}}, Err: nil},
+				{Messages: []*goiMap.Message{{
+					Uid: 100,
+					Body: map[*goiMap.BodySectionName]goiMap.Literal{
+						section: strings.NewReader(emailContent),
+					},
+				}}, Err: nil},
+			},
+		}
+		c := newTestClient(mb)
+
+		_, err := c.GetAttachment(ctx, "INBOX", "100", "test.pdf")
+		if err == nil {
+			t.Fatal("expected error for unparseable body")
+		}
+	})
+}
+
+func TestSearchEmailsLimit(t *testing.T) {
+	ctx := context.Background()
+	okStatus := &goiMap.MailboxStatus{Messages: 10}
+
+	t.Run("limit without offset", func(t *testing.T) {
+		mb := &MockBackend{
+			SelectStatus:     okStatus,
+			UidSearchUIDs:    []uint32{100, 101, 102, 103, 104},
+			UidFetchMessages: []*goiMap.Message{makeMessage(103, "D", nil), makeMessage(104, "E", nil)},
+		}
+		c := newTestClient(mb)
+
+		emails, total, err := c.SearchEmails(ctx, "INBOX", "", EmailFilters{Limit: 2})
+		if err != nil {
+			t.Fatalf("error = %v", err)
+		}
+		if total != 5 {
+			t.Errorf("total = %d, want 5", total)
+		}
+		if len(emails) != 2 {
+			t.Errorf("len(emails) = %d, want 2", len(emails))
 		}
 	})
 }
