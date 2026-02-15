@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"os"
@@ -10,7 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/rgabriel/mcp-icloud-email/config"
@@ -19,25 +20,141 @@ import (
 	"github.com/rgabriel/mcp-icloud-email/tools"
 )
 
-// version is set at build time via ldflags
+// version is set at build time via ldflags.
 var version = "dev"
 
-func main() {
-	// Initialize structured logging
-	logLevel := new(slog.LevelVar)
-	logLevel.Set(slog.LevelInfo)
-	if lvl := os.Getenv("LOG_LEVEL"); lvl != "" {
-		switch strings.ToUpper(lvl) {
-		case "DEBUG":
-			logLevel.Set(slog.LevelDebug)
-		case "WARN":
-			logLevel.Set(slog.LevelWarn)
-		case "ERROR":
-			logLevel.Set(slog.LevelError)
+// logLevel returns the slog level indicated by the LOG_LEVEL environment variable.
+func logLevel() slog.Level {
+	switch strings.ToUpper(os.Getenv("LOG_LEVEL")) {
+	case "DEBUG":
+		return slog.LevelDebug
+	case "WARN":
+		return slog.LevelWarn
+	case "ERROR":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
+// setupLogger initialises structured JSON logging on stderr and sets it as the
+// default logger. It returns the handler options so installRedaction can rebuild
+// the handler with the same settings.
+func setupLogger() *slog.HandlerOptions {
+	opts := &slog.HandlerOptions{Level: logLevel()}
+	handler := slog.NewJSONHandler(os.Stderr, opts)
+	slog.SetDefault(slog.New(handler))
+	return opts
+}
+
+// installRedaction wraps the global logger with secret redaction. Must be
+// called after config is loaded so the iCloud password is available.
+func installRedaction(opts *slog.HandlerOptions, secrets []string) {
+	base := slog.NewJSONHandler(os.Stderr, opts)
+	slog.SetDefault(slog.New(newRedactingHandler(base, secrets)))
+}
+
+// destructiveTools lists tools that permanently modify or delete data and
+// warrant audit-level logging with full request arguments.
+var destructiveTools = map[string]bool{
+	"delete_email":  true,
+	"delete_folder": true,
+	"send_email":    true,
+	"reply_email":   true,
+	"draft_email":   true,
+}
+
+// toolMiddleware wraps every tool handler with a context deadline, structured
+// logging (tool name, duration, request ID, success/error status), circuit
+// breaker checks, and audit logging for destructive operations.
+func toolMiddleware(d time.Duration, cb *CircuitBreaker) server.ToolHandlerMiddleware {
+	return func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
+		return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			// Circuit breaker check — fail fast if open.
+			done, cbErr := cb.Allow()
+			if cbErr != nil {
+				return nil, cbErr
+			}
+
+			requestID := generateRequestID()
+			start := time.Now()
+
+			slog.Debug("tool call started",
+				"request_id", requestID,
+				"tool", req.Params.Name,
+			)
+
+			ctx, cancel := context.WithTimeout(ctx, d)
+			defer cancel()
+
+			result, err := next(ctx, req)
+			duration := time.Since(start)
+
+			// Only Go errors trip the breaker; application-level IsError does not.
+			done(err == nil)
+
+			attrs := []any{
+				"request_id", requestID,
+				"tool", req.Params.Name,
+				"duration_ms", duration.Milliseconds(),
+			}
+
+			if destructiveTools[req.Params.Name] {
+				attrs = append(attrs, "audit", true, "arguments", req.Params.Arguments)
+			}
+
+			switch {
+			case err != nil:
+				slog.Error("tool call failed", append(attrs, "error", err)...)
+			case result != nil && result.IsError:
+				slog.Warn("tool call returned error", attrs...)
+			default:
+				slog.Info("tool call completed", attrs...)
+			}
+
+			return result, err
 		}
 	}
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))
-	slog.SetDefault(logger)
+}
+
+// concurrencyMiddleware limits the number of tool handlers running
+// concurrently. It uses a buffered channel as a semaphore and respects
+// context cancellation while waiting for a slot.
+func concurrencyMiddleware(maxConcurrent int) server.ToolHandlerMiddleware {
+	sem := make(chan struct{}, maxConcurrent)
+	return func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
+		return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+				return next(ctx, req)
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+	}
+}
+
+// chainMiddleware composes multiple middlewares into one. The first middleware
+// in the list is outermost (executed first).
+func chainMiddleware(middlewares ...server.ToolHandlerMiddleware) server.ToolHandlerMiddleware {
+	return func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
+		for i := len(middlewares) - 1; i >= 0; i-- {
+			next = middlewares[i](next)
+		}
+		return next
+	}
+}
+
+// generateRequestID returns an 8-character hex string from 4 random bytes.
+func generateRequestID() string {
+	b := make([]byte, 4)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func main() {
+	opts := setupLogger()
 
 	// Load configuration
 	cfg, err := config.Load()
@@ -45,6 +162,8 @@ func main() {
 		slog.Error("configuration error", "error", err)
 		os.Exit(1)
 	}
+
+	installRedaction(opts, []string{cfg.ICloudPassword})
 
 	// Create IMAP client
 	imapClient, err := imap.NewClient(cfg.ICloudEmail, cfg.ICloudPassword)
@@ -76,14 +195,19 @@ func main() {
 	// Create SMTP client
 	smtpClient := smtp.NewClient(cfg.ICloudEmail, cfg.ICloudPassword)
 
-	// Create MCP server with middleware (applied in reverse: logging wraps timeout wraps handler)
+	// Circuit breaker: 5 consecutive failures opens, 30s reset timeout
+	cb := NewCircuitBreaker(5, 30*time.Second)
+
+	// Create MCP server with hardened middleware chain
 	s := server.NewMCPServer(
 		"iCloud Email Server",
 		version,
 		server.WithToolCapabilities(false),
 		server.WithRecovery(),
-		server.WithToolHandlerMiddleware(timeoutMiddleware(60*time.Second)),
-		server.WithToolHandlerMiddleware(loggingMiddleware()),
+		server.WithToolHandlerMiddleware(chainMiddleware(
+			concurrencyMiddleware(10),
+			toolMiddleware(60*time.Second, cb),
+		)),
 	)
 
 	// Register search_emails tool
@@ -441,6 +565,7 @@ func main() {
 	slog.Info("server starting",
 		"version", version,
 		"email", cfg.ICloudEmail,
+		"tools", 14,
 		"imap_server", fmt.Sprintf("imap.mail.me.com:%d", 993),
 		"smtp_server", fmt.Sprintf("smtp.mail.me.com:%d", 587),
 	)
@@ -453,43 +578,4 @@ func main() {
 	}
 
 	slog.Info("server stopped")
-}
-
-// timeoutMiddleware wraps each tool handler with a context deadline.
-func timeoutMiddleware(timeout time.Duration) server.ToolHandlerMiddleware {
-	return func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
-		return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			ctx, cancel := context.WithTimeout(ctx, timeout)
-			defer cancel()
-			return next(ctx, req)
-		}
-	}
-}
-
-// loggingMiddleware logs each tool call with a unique request ID, tool name, duration, and outcome.
-func loggingMiddleware() server.ToolHandlerMiddleware {
-	return func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
-		return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			requestID := uuid.New().String()
-			tool := req.Params.Name
-			logger := slog.With("request_id", requestID, "tool", tool)
-
-			logger.Debug("tool call started")
-			start := time.Now()
-
-			result, err := next(ctx, req)
-			duration := time.Since(start)
-
-			switch {
-			case err != nil:
-				logger.Error("tool call failed", "duration_ms", duration.Milliseconds(), "error", err)
-			case result != nil && result.IsError:
-				logger.Warn("tool call returned error", "duration_ms", duration.Milliseconds())
-			default:
-				logger.Info("tool call completed", "duration_ms", duration.Milliseconds())
-			}
-
-			return result, err
-		}
-	}
 }
