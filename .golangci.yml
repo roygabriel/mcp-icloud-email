@@ -10,15 +10,19 @@ linters:
     - ineffassign
     - gosec
     - gocritic
+    - dupl
   settings:
     gosec:
       excludes:
         - G304 # File path provided as taint input - we validate save_path
     errcheck:
       check-blank: false
+    dupl:
+      threshold: 150
   exclusions:
     rules:
       - path: _test\.go
         linters:
           - errcheck
           - gosec
+          - dupl
